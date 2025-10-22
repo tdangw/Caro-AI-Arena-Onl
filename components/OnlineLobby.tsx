@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import * as onlineService from '../services/onlineService';
 import type { OnlinePlayer, Invitation, OnlineGame } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -19,24 +19,37 @@ interface SearchingModalProps {
 }
 
 const SearchingModal: React.FC<SearchingModalProps> = ({ onCancel }) => {
-  const [countdown, setCountdown] = useState(30);
+  const [timeLeft, setTimeLeft] = useState(30);
+  const animationStartRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (countdown <= 0) {
-      onCancel();
-      return;
-    }
+    let animationFrameId: number;
 
-    const timer = setInterval(() => {
-      setCountdown(prev => prev - 1);
-    }, 1000);
+    const animate = (timestamp: number) => {
+        if (animationStartRef.current === null) {
+            animationStartRef.current = timestamp;
+        }
+        const elapsed = timestamp - animationStartRef.current;
+        const newTimeLeft = Math.max(0, 30 - elapsed / 1000);
+        
+        setTimeLeft(newTimeLeft);
 
-    return () => clearInterval(timer);
-  }, [countdown, onCancel]);
+        if (newTimeLeft > 0) {
+            animationFrameId = requestAnimationFrame(animate);
+        } else {
+            onCancel();
+        }
+    };
 
+    animationFrameId = requestAnimationFrame(animate);
+
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [onCancel]);
+
+  const displayCountdown = Math.ceil(timeLeft);
   const radius = 60;
   const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (countdown / 30) * circumference;
+  const offset = circumference - (timeLeft / 30) * circumference;
 
   return (
     <div className="fixed inset-0 bg-slate-900/90 flex flex-col items-center justify-center z-50 backdrop-blur-sm animate-fade-in">
@@ -71,12 +84,12 @@ const SearchingModal: React.FC<SearchingModalProps> = ({ onCancel }) => {
             strokeLinecap="round"
             strokeDasharray={circumference}
             strokeDashoffset={offset}
-            className="transform -rotate-90 origin-center transition-all duration-1000 linear"
+            className="transform -rotate-90 origin-center"
             style={{ filter: 'url(#glow)'}}
           />
         </svg>
         <div className="absolute flex flex-col items-center justify-center text-white">
-            <span className="text-5xl font-bold tracking-tighter" style={{ textShadow: '0 0 10px rgba(255,255,255,0.5)' }}>{countdown}</span>
+            <span className="text-5xl font-bold tracking-tighter" style={{ textShadow: '0 0 10px rgba(255,255,255,0.5)' }}>{displayCountdown}</span>
         </div>
       </div>
        <h2 className="text-3xl font-bold text-white mt-8" style={{ textShadow: '0 0 15px rgba(56, 189, 248, 0.5)'}}>
@@ -103,11 +116,9 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = ({ onStartGame, onBack }) => {
   const { user, logOut } = useAuth();
   const { gameState } = useGameState();
   const [players, setPlayers] = useState<OnlinePlayer[]>([]);
-  const [invitation, setInvitation] = useState<Invitation | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [versusGame, setVersusGame] = useState<OnlineGame | null>(null);
   const [invitedPlayerIds, setInvitedPlayerIds] = useState<Record<string, 'invited'>>({});
-  const [inviteCountdown, setInviteCountdown] = useState(10);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const { playSound } = useSound();
 
@@ -133,49 +144,19 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = ({ onStartGame, onBack }) => {
       setPlayers(onlinePlayers.filter(p => p.uid !== user.uid));
     });
 
-    const unsubscribeInvites = onlineService.listenForInvitations(user.uid, (inv) => {
-      if(inv) playSound('select');
-      setInvitation(inv);
-    });
-
+    // FIX: Only act when a gameId is found. Do not do anything on a null gameId,
+    // as this was causing the "Find Match" modal to flicker and disappear.
     const unsubscribeGame = onlineService.listenForGameStart(user.uid, (gameId) => {
       if (gameId) {
         handleGameFound(gameId);
-      } else {
-        setIsSearching(false);
       }
     });
 
     return () => {
       unsubscribePlayers();
-      unsubscribeInvites();
       unsubscribeGame();
     };
-  }, [user, playSound]);
-
-  const handleDeclineInvite = useCallback(() => {
-    if (!user) return;
-    playSound('select');
-    onlineService.declineInvitation(user.uid);
-    setInvitation(null);
-  }, [user, playSound]);
-
-  useEffect(() => {
-    if (invitation) {
-        setInviteCountdown(10);
-        const timerId = setInterval(() => {
-            setInviteCountdown(prev => {
-                if (prev <= 1) {
-                    clearInterval(timerId);
-                    handleDeclineInvite();
-                    return 0;
-                }
-                return prev - 1;
-            });
-        }, 1000);
-        return () => clearInterval(timerId);
-    }
-  }, [invitation, handleDeclineInvite]);
+  }, [user]);
   
   const handleInvite = (player: OnlinePlayer) => {
     if (!user) return;
@@ -190,13 +171,6 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = ({ onStartGame, onBack }) => {
         return newState;
       });
     }, 11000); // 10s invite timeout + 1s buffer
-  };
-  
-  const handleAcceptInvite = async () => {
-    if (!user || !invitation) return;
-    const gameId = await onlineService.acceptInvitation(user, invitation);
-    setInvitation(null);
-    if(gameId) handleGameFound(gameId);
   };
   
   const handleFindMatch = async () => {
@@ -311,18 +285,6 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = ({ onStartGame, onBack }) => {
         </div>
       </div>
       
-      <Modal isOpen={!!invitation} title="Incoming Challenge!">
-         {invitation && (
-            <div className='text-center'>
-                <p className="text-slate-300 mb-6"><strong className='text-white'>{invitation.fromName}</strong> has challenged you to a match! <span className="text-slate-400">({inviteCountdown}s)</span></p>
-                <div className='flex justify-center gap-4'>
-                    <button onClick={handleDeclineInvite} className="bg-red-600 hover:bg-red-500 font-bold py-2 px-6 rounded-lg transition-colors">Decline</button>
-                    <button onClick={handleAcceptInvite} className="bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-6 rounded-lg transition-colors">Accept</button>
-                </div>
-            </div>
-         )}
-      </Modal>
-
       <SettingsModal 
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}

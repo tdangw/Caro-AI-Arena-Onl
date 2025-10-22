@@ -1,5 +1,5 @@
-
-import React, { useState, useCallback, useEffect } from 'react';
+// FIX: Corrected import statement for React hooks.
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import MainMenu from './components/MainMenu';
 import GameScreen from './components/GameScreen';
 import Shop from './components/Shop';
@@ -8,9 +8,10 @@ import AuthScreen from './components/AuthScreen';
 import OnlineLobby from './components/OnlineLobby';
 import { GameStateProvider, useGameState } from './context/GameStateContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import type { BotProfile } from './types';
+import type { BotProfile, Invitation } from './types';
 import { useSound } from './hooks/useSound';
 import * as onlineService from './services/onlineService';
+import Modal from './components/Modal';
 
 type View = 'menu' | 'pve_game' | 'shop' | 'inventory' | 'lobby' | 'online_game';
 type Overlay = 'shop' | 'inventory' | null;
@@ -28,7 +29,7 @@ const LoadingScreen: React.FC = () => (
 
 
 const AppContent: React.FC = () => {
-    const { user } = useAuth();
+    const { user, logOut } = useAuth();
     const [view, setView] = useState<View>(() => {
         return localStorage.getItem(ACTIVE_PVE_GAME_BOT_KEY) ? 'pve_game' : 'menu';
     });
@@ -46,29 +47,63 @@ const AppContent: React.FC = () => {
     const { gameState } = useGameState();
     const { playSound, playMusic, stopMusic } = useSound();
 
-    // Centralized cleanup for ghost players
-    useEffect(() => {
-        if (user) {
-            const cleanupInterval = setInterval(() => onlineService.triggerCleanup(), 15000);
-            onlineService.triggerCleanup(); // Run once on mount
-            return () => clearInterval(cleanupInterval);
+    // --- Global Invitation State ---
+    const [invitation, setInvitation] = useState<Invitation | null>(null);
+    const [inviteCountdown, setInviteCountdown] = useState(10);
+
+    // --- Idle Timeout Logic ---
+    const IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24 hours
+    const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const handleLogout = useCallback(() => {
+        if (user) { // Check if user exists before logging out
+            console.log("User has been idle for 24 hours. Logging out.");
+            logOut();
         }
-    }, [user]);
+    }, [user, logOut]);
 
-    // Fast-path presence update for tab close
+    const resetIdleTimer = useCallback(() => {
+        if (idleTimerRef.current) {
+            clearTimeout(idleTimerRef.current);
+        }
+        idleTimerRef.current = setTimeout(handleLogout, IDLE_TIMEOUT_MS);
+    }, [handleLogout]);
+
     useEffect(() => {
-        if (!user) return;
-        
-        const handleBeforeUnload = () => {
-            // This is a "best effort" attempt. The reliable part is the RTDB onDisconnect.
-            onlineService.goOffline(user.uid);
-        };
+        if (!user) { // Don't run timer if not logged in
+            if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+            return;
+        }
 
-        window.addEventListener('beforeunload', handleBeforeUnload);
+        const activityEvents: (keyof WindowEventMap)[] = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
+        
+        resetIdleTimer();
+
+        activityEvents.forEach(event => {
+            window.addEventListener(event, resetIdleTimer);
+        });
 
         return () => {
-            window.removeEventListener('beforeunload', handleBeforeUnload);
+            if (idleTimerRef.current) {
+                clearTimeout(idleTimerRef.current);
+            }
+            activityEvents.forEach(event => {
+                window.removeEventListener(event, resetIdleTimer);
+            });
         };
+    }, [resetIdleTimer, user]);
+
+
+    // Run once on initial load to rejoin active games
+    useEffect(() => {
+        if (user) {
+            onlineService.getOnlineUser(user.uid).then(player => {
+                if (player?.status === 'in_game' && player.gameId) {
+                    console.log(`Rejoining active game: ${player.gameId}`);
+                    onStartOnlineGame(player.gameId);
+                }
+            });
+        }
     }, [user]);
 
 
@@ -84,18 +119,56 @@ const AppContent: React.FC = () => {
     useEffect(() => {
         if (!user) return;
     
-        // This listener is active when in lobby or in a game
-        if (view === 'lobby' || view === 'online_game') {
-            const unsubscribe = onlineService.listenForGameStart(user.uid, (gameId) => {
-                // If we get a new and different game ID, update our state to switch to it.
-                if (gameId && gameId !== activeOnlineGameId) {
-                    console.log(`Detected game change to ${gameId}. Switching...`);
-                    onStartOnlineGame(gameId);
-                }
-            });
-            return () => unsubscribe();
+        // This listener is crucial for both starting a new game and for the rematch flow.
+        const unsubscribe = onlineService.listenForGameStart(user.uid, (gameId) => {
+            if (gameId && gameId !== activeOnlineGameId) {
+                console.log(`Detected game change to ${gameId}. Switching...`);
+                onStartOnlineGame(gameId);
+            }
+        });
+        return () => unsubscribe();
+    }, [user, activeOnlineGameId]);
+
+    // Global listener for invitations
+    useEffect(() => {
+        if (!user) return;
+        const unsubscribe = onlineService.listenForInvitations(user.uid, (inv) => {
+          if(inv) playSound('select');
+          setInvitation(inv);
+        });
+        return () => unsubscribe();
+    }, [user, playSound]);
+
+    const handleDeclineInvite = useCallback(() => {
+        if (!user) return;
+        playSound('select');
+        onlineService.declineInvitation(user.uid);
+        setInvitation(null);
+    }, [user, playSound]);
+
+    useEffect(() => {
+        if (invitation) {
+            setInviteCountdown(10);
+            const timerId = setInterval(() => {
+                setInviteCountdown(prev => {
+                    if (prev <= 1) {
+                        clearInterval(timerId);
+                        handleDeclineInvite();
+                        return 0;
+                    }
+                    return prev - 1;
+                });
+            }, 1000);
+            return () => clearInterval(timerId);
         }
-    }, [view, user, activeOnlineGameId]);
+    }, [invitation, handleDeclineInvite]);
+    
+    const handleAcceptInvite = async () => {
+        if (!user || !invitation) return;
+        // This will create a new game, and the listenForGameStart hook will handle the transition.
+        await onlineService.acceptInvitation(user, invitation);
+        setInvitation(null);
+    };
 
     const handleStartPVEGame = useCallback((bot: BotProfile) => {
         try {
@@ -137,15 +210,14 @@ const AppContent: React.FC = () => {
 
     const handleGameEnd = useCallback(() => {
         if (view === 'online_game') {
-            if (user && activeOnlineGameId) {
-                onlineService.leaveOnlineGame(activeOnlineGameId, user.uid);
-            }
-            setView('lobby'); // Go back to lobby after an online game
+            // The cleanup effect in GameScreen will handle setting the user back to 'idle'.
+            // This prevents a race condition that was causing the game over screen to loop.
+            setView('lobby');
             setActiveOnlineGameId(null);
         } else {
-            handleBackToMenu(); // Go back to main menu for PVE
+            handleBackToMenu();
         }
-    }, [view, handleBackToMenu, user, activeOnlineGameId]);
+    }, [view, handleBackToMenu]);
     
     const renderView = () => {
         switch (view) {
@@ -215,6 +287,19 @@ const AppContent: React.FC = () => {
                     {overlay === 'inventory' && <Inventory onBack={handleCloseOverlay} />}
                 </div>
             )}
+
+            <Modal isOpen={!!invitation} title="Incoming Challenge!">
+                {invitation && (
+                    <div className='text-center'>
+                        <p className="text-slate-300 mb-6"><strong className='text-white'>{invitation.fromName}</strong> has challenged you to a match! <span className="text-slate-400">({inviteCountdown}s)</span></p>
+                        <div className='flex justify-center gap-4'>
+                            <button onClick={handleDeclineInvite} className="bg-red-600 hover:bg-red-500 font-bold py-2 px-6 rounded-lg transition-colors">Decline</button>
+                            <button onClick={handleAcceptInvite} className="bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-6 rounded-lg transition-colors">Accept</button>
+                        </div>
+                    </div>
+                )}
+            </Modal>
+
             <style>{`
                 @keyframes app-fade-in {
                     from { opacity: 0; transform: scale(0.97); }

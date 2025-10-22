@@ -149,56 +149,59 @@ export const GameStateProvider: React.FC<{ children: ReactNode }> = ({ children 
 
   // Effect to load data from Firebase when user logs in
   useEffect(() => {
-    if (user) {
+    const loadUserData = async () => {
+        if (!user) {
+            setIsFirebaseLoaded(false);
+            setGameState(loadGuestState());
+            return;
+        }
+
         setIsFirebaseLoaded(false);
-        onlineService.getUserProfile(user.uid).then(profile => {
-            if (profile) {
-                // Hydrate state from Firebase profile
-                const activeTheme = THEMES.find(t => t.id === profile.activeThemeId) || DEFAULT_THEME;
-                const activePiece = PIECE_STYLES.find(p => p.id === profile.activePieceId) || DEFAULT_PIECES_X;
-                const activeAvatar = AVATARS.find(a => a.id === profile.activeAvatarId) || DEFAULT_AVATAR;
-                const activeEffect = PIECE_EFFECTS.find(e => e.id === profile.activeEffectId) || DEFAULT_EFFECT;
-                const activeVictory = VICTORY_EFFECTS.find(v => v.id === profile.activeVictoryEffectId) || DEFAULT_VICTORY_EFFECT;
-                const activeBoom = BOOM_EFFECTS.find(b => b.id === profile.activeBoomEffectId) || DEFAULT_BOOM_EFFECT;
-                
-                setGameState(prev => ({
-                    ...prev,
-                    playerName: profile.name,
-                    coins: profile.coins,
-                    onlineWins: profile.onlineWins,
-                    onlineLosses: profile.onlineLosses,
-                    onlineDraws: profile.onlineDraws,
-                    pveWins: profile.pveWins,
-                    pveLosses: profile.pveLosses,
-                    pveDraws: profile.pveDraws,
-                    playerLevel: profile.level,
-                    playerXp: profile.xp,
-                    ownedCosmeticIds: profile.ownedCosmeticIds,
-                    emojiInventory: profile.emojiInventory,
-                    activeTheme,
-                    activePieceX: activePiece,
-                    activePieceO: activePiece,
-                    activeAvatar,
-                    activeEffect,
-                    activeVictoryEffect: activeVictory,
-                    activeBoomEffect: activeBoom
-                }));
-                 // FIX: Added profile.name as the fourth argument to match the function signature.
-                 onlineService.setupPresenceSystem(user, profile.level, activeAvatar.url, profile.name);
-            } else {
-                // This is a new user (likely a guest) with no profile. Create one.
-                const newProfileName = gameState.playerName; // Use name from local/default state
-                onlineService.createUserProfile(user, newProfileName);
-                updateProfile(user, { displayName: newProfileName }); // Sync to Auth profile too
-                // FIX: Added newProfileName as the fourth argument to match the function signature.
-                onlineService.setupPresenceSystem(user, gameState.playerLevel, gameState.activeAvatar.url, newProfileName);
-            }
-        }).finally(() => setIsFirebaseLoaded(true));
-    } else {
-        // User logged out, reset to guest state
-        setIsFirebaseLoaded(false);
-        setGameState(loadGuestState());
-    }
+        const profile = await onlineService.getUserProfile(user.uid);
+
+        if (profile) {
+            // Hydrate state from Firebase profile
+            const activeTheme = THEMES.find(t => t.id === profile.activeThemeId) || DEFAULT_THEME;
+            const activePiece = PIECE_STYLES.find(p => p.id === profile.activePieceId) || DEFAULT_PIECES_X;
+            const activeAvatar = AVATARS.find(a => a.id === profile.activeAvatarId) || DEFAULT_AVATAR;
+            const activeEffect = PIECE_EFFECTS.find(e => e.id === profile.activeEffectId) || DEFAULT_EFFECT;
+            const activeVictory = VICTORY_EFFECTS.find(v => v.id === profile.activeVictoryEffectId) || DEFAULT_VICTORY_EFFECT;
+            const activeBoom = BOOM_EFFECTS.find(b => b.id === profile.activeBoomEffectId) || DEFAULT_BOOM_EFFECT;
+            
+            setGameState(prev => ({
+                ...prev,
+                playerName: profile.name,
+                coins: profile.coins,
+                onlineWins: profile.onlineWins,
+                onlineLosses: profile.onlineLosses,
+                onlineDraws: profile.onlineDraws,
+                pveWins: profile.pveWins,
+                pveLosses: profile.pveLosses,
+                pveDraws: profile.pveDraws,
+                playerLevel: profile.level,
+                playerXp: profile.xp,
+                ownedCosmeticIds: profile.ownedCosmeticIds,
+                emojiInventory: profile.emojiInventory,
+                activeTheme,
+                activePieceX: activePiece,
+                activePieceO: activePiece,
+                activeAvatar,
+                activeEffect,
+                activeVictoryEffect: activeVictory,
+                activeBoomEffect: activeBoom
+            }));
+            await onlineService.setupPresenceSystem(user, profile.level, activeAvatar.url, profile.name);
+        } else {
+            // This is a new user (likely a guest) with no profile. Create one.
+            const newProfileName = gameState.playerName; // Use name from local/default state
+            onlineService.createUserProfile(user, newProfileName);
+            updateProfile(user, { displayName: newProfileName }); // Sync to Auth profile too
+            await onlineService.setupPresenceSystem(user, gameState.playerLevel, gameState.activeAvatar.url, newProfileName);
+        }
+        setIsFirebaseLoaded(true);
+    };
+
+    loadUserData();
   }, [user]);
 
   // Effect to save state

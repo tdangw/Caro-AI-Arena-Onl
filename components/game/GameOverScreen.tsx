@@ -1,9 +1,6 @@
-
 import React, { useEffect, useState, useMemo } from 'react';
 import type { Player, GameMode, OnlineGame } from '../../types';
 import { COIN_REWARD, XP_REWARD, getXpForNextLevel } from '../../constants';
-import * as onlineService from '../../services/onlineService';
-import { useAuth } from '../../context/AuthContext';
 
 // --- Helper Hooks and Functions ---
 const useAnimatedCounter = (endValue: number, start: boolean, duration = 1200) => {
@@ -43,11 +40,10 @@ interface GameOverScreenProps {
   playerXp: number;
   gameMode: GameMode;
   onlineGame?: OnlineGame | null;
+  leaveCountdown: number;
 }
 
-const GameOverScreen: React.FC<GameOverScreenProps> = ({show, winner, timedOutPlayer, playerMark, onReset, onExit, playerLevel, playerXp, gameMode, onlineGame}) => {
-    const { user } = useAuth();
-    const [leaveCountdown, setLeaveCountdown] = useState(15);
+const GameOverScreen: React.FC<GameOverScreenProps> = ({show, winner, timedOutPlayer, playerMark, onReset, onExit, playerLevel, playerXp, gameMode, leaveCountdown}) => {
     const [animationStage, setAnimationStage] = useState<'start' | 'filling' | 'levelUp' | 'done'>('start');
     const [displayLevel, setDisplayLevel] = useState(playerLevel);
 
@@ -107,22 +103,11 @@ const GameOverScreen: React.FC<GameOverScreenProps> = ({show, winner, timedOutPl
 
     const titleColor = outcome === 'win' ? "text-green-400" : outcome === 'draw' ? "text-yellow-400" : "text-red-500";
     
+    // This effect handles the summary screen animations.
     useEffect(() => {
-        let countdownInterval: ReturnType<typeof setInterval> | null = null;
         let animationTimer: ReturnType<typeof setTimeout> | null = null;
         if (show) {
             setDisplayLevel(initialLevel);
-            setLeaveCountdown(15);
-            countdownInterval = setInterval(() => {
-                setLeaveCountdown(prev => {
-                    if (prev <= 1) {
-                        onExit();
-                        return 0;
-                    }
-                    return prev - 1;
-                });
-            }, 1000);
-            
             animationTimer = setTimeout(() => {
               setAnimationStage('filling');
               if (didLevelUp) {
@@ -137,45 +122,13 @@ const GameOverScreen: React.FC<GameOverScreenProps> = ({show, winner, timedOutPl
             }, 500);
 
             return () => {
-                if(countdownInterval) clearInterval(countdownInterval);
                 if(animationTimer) clearTimeout(animationTimer);
             };
         } else {
             setAnimationStage('start');
             setDisplayLevel(playerLevel);
-            setLeaveCountdown(15);
         }
-    }, [show, onExit, didLevelUp, newLevel, initialLevel, playerLevel]);
-    
-    const renderOnlineButtons = () => {
-        if (!onlineGame || !user) return null;
-
-        const opponentUid = onlineGame.players.X === user.uid ? onlineGame.players.O : onlineGame.players.X;
-        const myRequest = onlineGame.rematch?.[user.uid];
-        const opponentRequest = onlineGame.rematch?.[opponentUid];
-
-        if (opponentRequest === 'requested') {
-            return (
-                 <button onClick={() => onlineService.acceptRematch(onlineGame.id, user.uid, opponentUid)} className="w-full max-w-sm bg-green-500 hover:bg-green-400 text-black font-bold py-3 px-6 rounded-lg transition-colors text-lg">
-                    Accept Rematch!
-                </button>
-            )
-        }
-        if (myRequest === 'requested') {
-            return (
-                 <button disabled className="w-full max-w-sm bg-slate-600 text-slate-400 font-bold py-3 px-6 rounded-lg text-lg">
-                    Waiting for opponent...
-                </button>
-            )
-        }
-
-        return (
-            <button onClick={() => onlineService.requestRematch(onlineGame.id, user.uid)} className="w-full max-w-sm bg-blue-500 hover:bg-blue-400 text-white font-bold py-3 px-6 rounded-lg transition-colors text-lg">
-                Rematch
-            </button>
-        )
-    };
-
+    }, [show, didLevelUp, newLevel, initialLevel, playerLevel]);
 
     return (
         <div className={`fixed inset-0 bg-black/80 flex items-center justify-center z-40 transition-opacity duration-500 ${show ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
@@ -224,15 +177,13 @@ const GameOverScreen: React.FC<GameOverScreenProps> = ({show, winner, timedOutPl
                 </div>
 
                 <div className="mt-8 space-y-3">
-                    {gameMode === 'pve' ? (
+                    {gameMode === 'pve' && (
                         <button onClick={onReset} className="w-full max-w-sm bg-green-500 hover:bg-green-400 text-black font-bold py-3 px-6 rounded-lg transition-colors text-lg">
                             Play again!
                         </button>
-                    ) : (
-                        renderOnlineButtons()
                     )}
                     <button onClick={onExit} className="w-full max-w-sm bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 px-6 rounded-lg transition-colors">
-                        {gameMode === 'pve' ? `Leave room (${leaveCountdown})` : `Back to Lobby (${leaveCountdown})`}
+                       Back to {gameMode === 'online' ? 'Lobby' : 'Menu'} ({leaveCountdown}s)
                     </button>
                 </div>
             </div>

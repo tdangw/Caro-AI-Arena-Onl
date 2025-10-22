@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { useGameLogic } from '../hooks/useGameLogic';
 import { useOnlineGame } from '../hooks/useOnlineGame';
@@ -6,7 +5,7 @@ import { getAIMove } from '../services/aiService';
 import { updateOpeningBook } from '../services/openingBook';
 import * as onlineService from '../services/onlineService';
 import type { Player, GameTheme, PieceStyle, BotProfile, Avatar, Emoji, PieceEffect, VictoryEffect, BoomEffect, GameMode } from '../types';
-import { PIECE_STYLES, EffectStyles, VictoryAndBoomStyles, DEFAULT_PIECES_X, DEFAULT_PIECES_O } from '../constants';
+import { PIECE_STYLES, EffectStyles, VictoryAndBoomStyles, DEFAULT_PIECES_X, DEFAULT_PIECES_O, TURN_TIME } from '../constants';
 import { useGameState } from '../context/GameStateContext';
 import { useAuth } from '../context/AuthContext';
 import { useSound } from '../hooks/useSound';
@@ -24,7 +23,7 @@ type GameOverStage = 'none' | 'banner' | 'effects' | 'summary';
 
 const formatTime = (seconds: number) => {
     const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
+    const remainingSeconds = Math.round(seconds % 60);
     return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
 }
 
@@ -61,6 +60,8 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [isEmojiPanelOpen, setEmojiPanelOpen] = useState(false);
     const [isUndoModalOpen, setIsUndoModalOpen] = useState(false);
+    const [copySuccess, setCopySuccess] = useState(false);
+    const [leaveCountdown, setLeaveCountdown] = useState(15);
 
     // Game Over Flow State
     const [gameOverStage, setGameOverStage] = useState<GameOverStage>('none');
@@ -73,53 +74,103 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
     const [playerEmote, setPlayerEmote] = useState<{key: number, emoji: string} | null>(null);
     const [opponentEmote, setOpponentEmote] = useState<{key: number, emoji: string} | null>(null);
     
+    const [hasShownFirstMove, setHasShownFirstMove] = useState(false);
+    
+    const handleOnlineFirstMoveEnd = useCallback(() => {
+        setHasShownFirstMove(true);
+    }, []);
+    
     // --- Refs ---
     const isAiThinkingRef = useRef(false);
     const playerAvatarRef = useRef<HTMLDivElement>(null);
     const opponentAvatarRef = useRef<HTMLDivElement>(null);
+    const hasLoadedOnlineGame = useRef(false);
+    const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
 
     // --- Destructure from active logic hook ---
-    const { board, currentPlayer, winner, isGameOver, winningLine, isDecidingFirst, totalGameTime, gameId, playerMark, makeMove, resign, lastMove } = gameLogic;
-    const { onlineGameData, isLoading: isLoadingOnlineGame, opponentEmote: onlineOpponentEmote } = onlineLogic;
+    const { board, currentPlayer, winner, isGameOver, winningLine, isDecidingFirst, gameId, playerMark, makeMove, resign, lastMove } = gameLogic;
+    const { totalGameTime: pveTotalGameTime } = pveLogic;
+    const { onlineGameData, isLoading: isLoadingOnlineGame, opponentEmote: onlineOpponentEmote, activePlayerTime, turnTimeLeft: onlineTurnTimeLeft } = onlineLogic;
     
+    // Set a ref once the game data has been successfully loaded at least once.
+    if (onlineGameData) {
+        hasLoadedOnlineGame.current = true;
+    }
+
     // --- Effects ---
     
-    // Reset state on new game to prevent old game state from persisting
+    // This cleanup effect is crucial for preventing race conditions when leaving an online game.
+    useEffect(() => {
+        if (gameMode === 'online' && onlineGameId && user) {
+            // This is the cleanup function that will run when the component unmounts
+            // because the key changes or the view switches.
+            return () => {
+                onlineService.leaveOnlineGame(onlineGameId, user.uid);
+            };
+        }
+    }, [gameMode, onlineGameId, user]);
+    
     useEffect(() => {
         isGameResultProcessedRef.current = false;
         setGameOverStage('none');
         setGameOverMessage(null);
         setWinnerPlayer(null);
+        setHasShownFirstMove(false);
     }, [gameId, onlineGameId]);
     
-    // Handle sound for new moves
+    // Countdown timer for automatically leaving the game over screen.
+    useEffect(() => {
+        const clearCountdown = () => {
+            if (countdownIntervalRef.current) {
+                clearInterval(countdownIntervalRef.current);
+                countdownIntervalRef.current = null;
+            }
+        };
+
+        if (gameOverStage === 'summary') {
+            setLeaveCountdown(15);
+            countdownIntervalRef.current = setInterval(() => {
+                setLeaveCountdown(prev => {
+                    if (prev <= 1) {
+                        clearCountdown();
+                        onExit();
+                        return 0;
+                    }
+                    return prev - 1;
+                });
+            }, 1000);
+        } else {
+            clearCountdown();
+        }
+        
+        return clearCountdown;
+    }, [gameOverStage, onExit]);
+    
     useEffect(() => {
         if (lastMove) playSound('move');
     }, [lastMove, playSound]);
 
-    // Handle online opponent emotes
     useEffect(() => {
         if (gameMode === 'online' && onlineOpponentEmote) {
             setOpponentEmote(onlineOpponentEmote);
         }
     }, [onlineOpponentEmote, gameMode]);
 
-    // Synchronize piece skin changes to Firebase
     useEffect(() => {
         if (gameMode === 'online' && onlineGameId && user && gameState.activePieceX?.id) {
             onlineService.updatePlayerPieceSkin(onlineGameId, user.uid, gameState.activePieceX.id);
         }
     }, [gameState.activePieceX?.id, gameMode, onlineGameId, user]);
 
-    // Handle online game document deletion (opponent leaves)
     const isOnlineGameOverSequenceActive = gameOverStage !== 'none';
     useEffect(() => {
-        if (gameMode === 'online' && !isLoadingOnlineGame && !onlineGameData && !isOnlineGameOverSequenceActive) {
+        if (gameMode === 'online' && hasLoadedOnlineGame.current && !isLoadingOnlineGame && !onlineGameData && !isOnlineGameOverSequenceActive) {
             onExit();
         }
     }, [gameMode, isLoadingOnlineGame, onlineGameData, onExit, isOnlineGameOverSequenceActive]);
 
-    // PVE Logic: Choose AI piece style and trigger AI moves
+    // PVE Logic
     useEffect(() => {
         if (gameMode === 'pve' && isDecidingFirst) {
             const randomPiece = PIECE_STYLES[Math.floor(Math.random() * PIECE_STYLES.length)];
@@ -158,7 +209,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
             
             if (result === 'win') { playSound('win'); playSound('announce_win'); setGameOverMessage('You Win!'); } 
             else if (result === 'loss') { playSound('lose'); playSound('announce_lose'); setGameOverMessage('You Lose!'); }
-            else { setGameOverMessage('Draw!'); }
+            else { setGameOverMessage(winner === 'timeout' ? 'Time Out!' : 'Draw!'); }
 
             if (gameMode === 'pve' && winner !== playerMark && result !== 'draw') updateOpeningBook(pveLogic.moveHistory);
 
@@ -188,7 +239,6 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
         }
     }, [isGameOver, winner, playerMark, applyGameResult, bot, gameId, gameMode, onlineGameData, user, pveLogic.moveHistory, playSound]);
     
-    // --- Derived Memos ---
     const opponentInfo = useMemo(() => {
         if (gameMode === 'online' && onlineGameData && user) {
             const opponentUid = onlineGameData.players.X === user.uid ? onlineGameData.players.O : onlineGameData.players.X;
@@ -218,7 +268,6 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
     const botStats = gameState.botStats[bot?.id || ''] || { wins: 0, losses: 0, draws: 0 };
     const ownedEmojis = useMemo(() => onlineService.getOwnedEmojis(gameState.ownedCosmeticIds, gameState.emojiInventory), [gameState.ownedCosmeticIds, gameState.emojiInventory]);
 
-    // --- Handlers ---
     const handleCellClick = (row: number, col: number) => {
         if (isGameOver || currentPlayer !== playerMark || board[row][col] !== null) return;
         makeMove(row, col);
@@ -243,18 +292,20 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
         isGameResultProcessedRef.current = false;
         if (gameMode === 'pve') pveLogic.resetGameForRematch();
     }, [pveLogic, gameMode, playSound]);
+
+    const handleCopyGameId = () => {
+        if (gameId) {
+            navigator.clipboard.writeText(gameId);
+            setCopySuccess(true);
+            setTimeout(() => setCopySuccess(false), 2000);
+        }
+    }
     
-    // --- Render ---
     const DecoratorComponent = theme.decoratorComponent;
     const VictoryComponent = activeVictoryEffect.component;
     const BoomComponent = activeBoomEffect.component;
-    const [showOnlineFirstMove, setShowOnlineFirstMove] = useState(false);
     
-    useEffect(() => {
-        if(gameMode === 'online' && onlineGameData && Object.keys(onlineGameData.board).length === 0 && !isGameOver) {
-            setShowOnlineFirstMove(true);
-        }
-    }, [gameMode, onlineGameData, isGameOver]);
+    const shouldShowFirstMoveAnimation = (gameMode === 'pve' && isDecidingFirst) || (gameMode === 'online' && onlineGameData && Object.keys(onlineGameData.board).length === 0 && !isGameOver && !hasShownFirstMove);
 
     if (gameMode === 'online' && isLoadingOnlineGame) {
         return (
@@ -267,6 +318,10 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
         );
     }
     
+    const displayedTime = gameMode === 'pve' ? pveTotalGameTime : activePlayerTime;
+    const turnTimeLeft = gameMode === 'pve' ? pveLogic.turnTimeLeft : onlineTurnTimeLeft;
+    const gameIdToDisplay = gameMode === 'online' && gameId ? `Room: ${gameId.split('_').pop()?.substring(0, 6)}` : null;
+
     return (
     <div
         style={theme.boardBgImage ? { backgroundImage: `url(${theme.boardBgImage})` } : {}}
@@ -298,17 +353,40 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
                  <div className="flex justify-between items-end px-2 mb-[4px] -mt-px">
                     <PlayerInfo ref={playerAvatarRef} name={playerInfo.name} avatar={playerInfo.avatar.url} level={playerInfo.level} align="left" player={playerMark} isCurrent={currentPlayer === playerMark} piece={allPieces[playerMark]} />
                     <div className="text-center pb-1 text-shadow">
+                        {gameIdToDisplay && (
+                            <div className="text-xs text-slate-400 font-mono mb-1 cursor-pointer" title="Click to copy full Game ID" onClick={handleCopyGameId}>
+                                {copySuccess ? 'Copied!' : gameIdToDisplay}
+                            </div>
+                        )}
                         {gameMode === 'pve' && bot && <div className="text-white font-mono text-xs tracking-wider whitespace-nowrap" title={`vs ${bot.name}`}><span className="text-green-400">Win {botStats.wins}</span> - <span className="text-red-400">Lose {botStats.losses}</span></div>}
-                        <div className="text-white font-mono text-xl tracking-wider">{formatTime(totalGameTime)}</div>
+                         <div className="text-white font-mono text-2xl tracking-wider">{formatTime(displayedTime)}</div>
                     </div>
                     <PlayerInfo ref={opponentAvatarRef} name={opponentInfo.name} avatar={opponentInfo.avatar} level={opponentInfo.level} align="right" player={playerMark === 'X' ? 'O' : 'X'} isCurrent={currentPlayer !== playerMark} piece={allPieces[playerMark === 'X' ? 'O' : 'X']} skillLevel={gameMode === 'pve' ? bot?.skillLevel : undefined} />
                 </div>
                 <div className="w-full mx-auto">
-                    <SmoothTimerBar currentPlayer={currentPlayer} isPaused={isPaused} isGameOver={isGameOver} isDecidingFirst={isDecidingFirst} />
+                    {/* FIX: Removed unsupported 'time' prop. The component uses its own internal timer. */}
+                    <SmoothTimerBar
+                        key={`${gameId}-${currentPlayer}`}
+                        duration={TURN_TIME}
+                        isPaused={isPaused}
+                        isGameOver={isGameOver}
+                        isDecidingFirst={isDecidingFirst || shouldShowFirstMoveAnimation}
+                        time={turnTimeLeft}
+                    />
                     <div className="mt-px relative bg-black/40 backdrop-blur-lg rounded-xl p-2 border border-white/10 shadow-lg">
                         <GameBoard board={board} onCellClick={handleCellClick} winningLine={winningLine} pieces={allPieces} aiThinkingCell={aiThinkingCell} theme={theme} lastMove={lastMove} effect={activeEffect} />
-                        {isDecidingFirst && gameMode === 'pve' && <FirstMoveAnimation pieces={allPieces} onAnimationEnd={pveLogic.beginGame} playerMark={playerMark} playSound={playSound} gameMode="pve" playerInfo={playerInfo} opponentInfo={opponentInfo} />}
-                        {showOnlineFirstMove && gameMode === 'online' && onlineGameData && <FirstMoveAnimation pieces={allPieces} onAnimationEnd={() => setShowOnlineFirstMove(false)} playerMark={playerMark} playSound={playSound} gameMode="online" forcedWinner={onlineGameData.currentPlayer} playerInfo={playerInfo} opponentInfo={opponentInfo} />}
+                        {shouldShowFirstMoveAnimation && (
+                            <FirstMoveAnimation 
+                                pieces={allPieces} 
+                                onAnimationEnd={gameMode === 'pve' ? pveLogic.beginGame : handleOnlineFirstMoveEnd}
+                                playerMark={playerMark} 
+                                playSound={playSound} 
+                                gameMode={gameMode} 
+                                forcedWinner={gameMode === 'online' ? onlineGameData?.currentPlayer : null}
+                                playerInfo={playerInfo} 
+                                opponentInfo={opponentInfo} 
+                            />
+                        )}
                     </div>
                 </div>
             </main>
@@ -319,14 +397,15 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
         <GameOverScreen 
             show={gameOverStage === 'summary'} 
             winner={winner} 
-            timedOutPlayer={winner === 'timeout' ? currentPlayer : null} 
+            timedOutPlayer={winner === 'timeout' ? (currentPlayer === playerMark ? (playerMark === 'X' ? 'O' : 'X') : currentPlayer) : null} 
             playerMark={playerMark} 
             onReset={handleGameReset} 
-            onExit={onExit} 
+            onExit={() => onExit()}
             playerLevel={gameState.playerLevel} 
             playerXp={gameState.playerXp} 
             gameMode={gameMode}
             onlineGame={onlineGameData}
+            leaveCountdown={leaveCountdown}
         />
 
         <UndoModal 
