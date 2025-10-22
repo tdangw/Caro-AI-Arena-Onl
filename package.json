@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "homepage": "https://tdangw.github.io/Caro-Al-Arena-Onl/",
+  "homepage": "https://tdangw.github.io/Caro-AI-Arena-Onl/",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
