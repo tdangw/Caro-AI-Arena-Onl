@@ -1,5 +1,3 @@
-
-
 import React from 'react';
 import type { GameTheme, PieceStyle, Cosmetic, BotProfile, Avatar, Emoji, PieceEffect, VictoryEffect, BoomEffect, MusicTrack } from './types';
 
@@ -20,7 +18,71 @@ export const XP_REWARD = {
     draw: 10,
     loss: 5,
 };
+
 export const getXpForNextLevel = (level: number) => 100 + (level - 1) * 50;
+
+// --- Ranking System ---
+export const RANKS = [
+  { name: 'Sắt', tiers: 3, baseCp: 0, icon: '🛡️' }, // 0 - 299
+  { name: 'Đồng', tiers: 3, baseCp: 300, icon: '🥉' }, // 300 - 599
+  { name: 'Bạc', tiers: 3, baseCp: 600, icon: '🥈' }, // 600 - 899
+  { name: 'Vàng', tiers: 3, baseCp: 900, icon: '🥇' }, // 900 - 1199
+  { name: 'Kim Cương', tiers: 3, baseCp: 1200, icon: '💎' }, // 1200 - 1499
+  { name: 'Cao Thủ', tiers: 3, baseCp: 1500, icon: '👑' }, // 1500 - 1799
+  { name: 'Thách Đấu', tiers: 0, baseCp: 1800, icon: '🔥' }, // 1800+
+];
+
+export const getRankFromCp = (cp: number | null | undefined) => {
+  const currentCp = Number.isFinite(cp) ? Math.max(0, cp as number) : 0;
+  let playerRank = RANKS[0];
+
+  for (let i = RANKS.length - 1; i >= 0; i--) {
+    if (currentCp >= RANKS[i].baseCp) {
+      playerRank = RANKS[i];
+      break;
+    }
+  }
+
+  if (playerRank.name === 'Thách Đấu') {
+    return { name: `Thách Đấu`, cpInTier: currentCp, icon: playerRank.icon };
+  }
+
+  const cpIntoRank = currentCp - playerRank.baseCp;
+  const tierCp = 100;
+  const tier = playerRank.tiers - Math.floor(cpIntoRank / tierCp);
+  const cpInTier = cpIntoRank % tierCp;
+  const tierRoman = { 3: 'III', 2: 'II', 1: 'I' }[tier] || 'I';
+
+  return { name: `${playerRank.name} ${tierRoman}`, cpInTier, icon: playerRank.icon };
+};
+
+/**
+ * Calculates the change in Caro Points (CP) based on the Elo rating system.
+ * @param playerCp The CP of the player for whom the change is being calculated.
+ * @param opponentCp The CP of their opponent.
+ * @param result The outcome of the game for the player ('win', 'loss', or 'draw').
+ * @returns The number of CP points the player gains or loses.
+ */
+export const calculateCpChange = (playerCp: number, opponentCp: number, result: 'win' | 'loss' | 'draw'): number => {
+    const K = 40; // K-factor, determines the maximum change in rating.
+    const score = result === 'win' ? 1 : result === 'draw' ? 0.5 : 0;
+    
+    // Calculate the expected score for the player against the opponent
+    const expectedScore = 1 / (1 + Math.pow(10, (opponentCp - playerCp) / 400));
+    
+    // Calculate the change in rating
+    const cpChange = K * (score - expectedScore);
+    
+    // Ensure wins grant at least 1 point and losses remove at least 1 point
+    if (result === 'win') {
+        return Math.max(1, Math.round(cpChange));
+    }
+    if (result === 'loss') {
+        return Math.min(-1, Math.round(cpChange));
+    }
+    
+    return Math.round(cpChange);
+};
 
 
 // --- SVG Icon Components ---

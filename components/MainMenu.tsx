@@ -173,16 +173,16 @@ const PlayerProfile: React.FC = () => {
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-center mt-4">
                     <div className="transition-transform duration-200 hover:scale-110 p-2 rounded-lg">
-                        <p className="text-green-400 font-bold text-xl">{pveWins}</p>
-                        <p className="text-slate-400 text-xs uppercase tracking-wider">Wins</p>
+                        <p className="text-green-400 font-bold text-lg">{pveWins}</p>
+                        <p className="text-slate-400 text-[10px] leading-tight uppercase tracking-wider">Wins</p>
                     </div>
                     <div className="transition-transform duration-200 hover:scale-110 p-2 rounded-lg">
-                        <p className="text-red-400 font-bold text-xl">{pveLosses}</p>
-                        <p className="text-slate-400 text-xs uppercase tracking-wider">Losses</p>
+                        <p className="text-red-400 font-bold text-lg">{pveLosses}</p>
+                        <p className="text-slate-400 text-[10px] leading-tight uppercase tracking-wider">Losses</p>
                     </div>
                     <div className="transition-transform duration-200 hover:scale-110 p-2 rounded-lg">
-                        <p className="text-cyan-400 font-bold text-xl">{winRate}%</p>
-                        <p className="text-slate-400 text-xs uppercase tracking-wider">Win Rate</p>
+                        <p className="text-cyan-400 font-bold text-lg">{winRate}%</p>
+                        <p className="text-slate-400 text-[10px] leading-tight uppercase tracking-wider">Win Rate</p>
                     </div>
                 </div>
             </div>

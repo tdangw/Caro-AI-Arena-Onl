@@ -10,6 +10,7 @@ const LOCAL_STORAGE_KEY = 'caroGameState_v9_guest'; // Renamed to avoid conflict
 
 interface GameState {
   coins: number;
+  cp: number;
   playerName: string;
   pveWins: number;
   pveLosses: number;
@@ -40,7 +41,7 @@ interface GameState {
 interface GameStateContextType {
   gameState: GameState;
   setPlayerName: (name: string) => void;
-  applyGameResult: (result: 'win' | 'loss' | 'draw', opponentId: string, gameId: string | null) => void;
+  applyGameResult: (result: 'win' | 'loss' | 'draw', opponentId: string, gameId: string | null, cpChange?: number) => void;
   spendCoins: (amount: number) => boolean;
   purchaseCosmetic: (cosmetic: Cosmetic) => boolean;
   consumeEmoji: (emojiId: string) => void;
@@ -67,6 +68,7 @@ const sanitizeCosmetic = (cosmetic: any) => {
 
 const createDefaultGameState = (): GameState => ({
   coins: 500,
+  cp: 0,
   playerName: `Player_${Math.floor(1000 + Math.random() * 9000)}`,
   pveWins: 0,
   pveLosses: 0,
@@ -129,6 +131,7 @@ const loadGuestState = (): GameState => {
             onlineWins: parsed.onlineWins ?? 0,
             onlineLosses: parsed.onlineLosses ?? 0,
             onlineDraws: parsed.onlineDraws ?? 0,
+            cp: parsed.cp ?? 0,
             activeTheme,
             activePieceX,
             activePieceO,
@@ -172,6 +175,7 @@ export const GameStateProvider: React.FC<{ children: ReactNode }> = ({ children 
                 ...prev,
                 playerName: profile.name,
                 coins: profile.coins,
+                cp: profile.cp ?? 0,
                 onlineWins: profile.onlineWins,
                 onlineLosses: profile.onlineLosses,
                 onlineDraws: profile.onlineDraws,
@@ -179,7 +183,7 @@ export const GameStateProvider: React.FC<{ children: ReactNode }> = ({ children 
                 pveLosses: profile.pveLosses,
                 pveDraws: profile.pveDraws,
                 playerLevel: profile.level,
-                playerXp: profile.xp,
+                xp: profile.xp,
                 ownedCosmeticIds: profile.ownedCosmeticIds,
                 emojiInventory: profile.emojiInventory,
                 activeTheme,
@@ -212,6 +216,7 @@ export const GameStateProvider: React.FC<{ children: ReactNode }> = ({ children 
         const profileToSave: Partial<UserProfile> = {
             name: gameState.playerName,
             coins: gameState.coins,
+            cp: gameState.cp,
             onlineWins: gameState.onlineWins,
             onlineLosses: gameState.onlineLosses,
             onlineDraws: gameState.onlineDraws,
@@ -262,7 +267,7 @@ export const GameStateProvider: React.FC<{ children: ReactNode }> = ({ children 
     return true;
   }, [gameState.coins]);
   
-  const applyGameResult = useCallback((result: 'win' | 'loss' | 'draw', opponentId: string, gameId: string | null) => {
+  const applyGameResult = useCallback((result: 'win' | 'loss' | 'draw', opponentId: string, gameId: string | null, cpChange: number = 0) => {
     setGameState(prev => {
         if (gameId && prev.lastProcessedGameId === gameId) return prev;
 
@@ -298,6 +303,7 @@ export const GameStateProvider: React.FC<{ children: ReactNode }> = ({ children 
             onlineWins: !isPVE && result === 'win' ? prev.onlineWins + 1 : prev.onlineWins,
             onlineLosses: !isPVE && result === 'loss' ? prev.onlineLosses + 1 : prev.onlineLosses,
             onlineDraws: !isPVE && result === 'draw' ? prev.onlineDraws + 1 : prev.onlineDraws,
+            cp: !isPVE ? Math.max(0, prev.cp + cpChange) : prev.cp,
             botStats: newBotStats,
             lastProcessedGameId: gameId || prev.lastProcessedGameId,
         };

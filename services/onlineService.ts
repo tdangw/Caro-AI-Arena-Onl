@@ -105,6 +105,7 @@ export const createUserProfile = async (user: User, name: string): Promise<void>
         level: 1,
         xp: 0,
         coins: 500,
+        cp: 0,
         onlineWins: 0,
         onlineLosses: 0,
         onlineDraws: 0,
@@ -131,7 +132,6 @@ export const getUserProfile = async (uid: string): Promise<UserProfile | null> =
 
 export const updateUserProfile = async (uid: string, data: Partial<UserProfile>): Promise<void> => {
     const userRef = doc(db, 'users', uid);
-    // Use setDoc with merge to prevent "No document to update" error on new user creation
     await setDoc(userRef, data, { merge: true });
 };
 
@@ -139,7 +139,6 @@ export const updateAuthAndProfileName = async (user: User, name: string) => {
     await updateProfile(user, { displayName: name });
     await updateUserProfile(user.uid, { name });
 
-    // Also update the presence document if it exists
     const onlineUserRef = doc(db, 'onlineUsers', user.uid);
     try {
         const onlineUserSnap = await getDoc(onlineUserRef);
@@ -157,12 +156,9 @@ export const setupPresenceSystem = async (user: User, level: number, avatarUrl: 
     const userStatusDatabaseRef = ref(rtdb, `/status/${uid}`);
     const userStatusFirestoreRef = doc(db, 'onlineUsers', uid);
 
-    // First, check the user's current status in Firestore.
     const docSnap = await getDoc(userStatusFirestoreRef);
     const currentStatus = docSnap.exists() ? docSnap.data().status : 'idle';
 
-    // If the user is rejoining a page while in a game, we MUST NOT overwrite their status.
-    // We only set up the RTDB connection for presence and then exit.
     if (currentStatus === 'in_game' || currentStatus === 'in_queue') {
         onValue(ref(rtdb, '.info/connected'), (snapshot) => {
             if (snapshot.val() === false) return;
@@ -174,7 +170,6 @@ export const setupPresenceSystem = async (user: User, level: number, avatarUrl: 
         return;
     }
 
-    // If the user is not in a game, proceed with the full setup which sets their status to 'idle'.
     const isOnlineForDatabase = { state: 'online', last_changed: rtdbServerTimestamp() };
     const isOfflineForDatabase = { state: 'offline', last_changed: rtdbServerTimestamp() };
 
@@ -210,9 +205,26 @@ export const goOffline = async (uid: string) => {
 // --- Lobby & Matchmaking ---
 export const getOnlinePlayers = (callback: (players: OnlinePlayer[]) => void): (() => void) => {
     const q = query(collection(db, "onlineUsers"));
-    return onSnapshot(q, (snapshot) => {
-        const players = snapshot.docs.map(doc => doc.data() as OnlinePlayer);
-        callback(players);
+    return onSnapshot(q, async (snapshot) => {
+        const playersFromFirestore = snapshot.docs.map(doc => doc.data() as OnlinePlayer);
+
+        const rtdbStatusRef = ref(rtdb, 'status');
+        const rtdbSnapshot = await get(rtdbStatusRef);
+        
+        if (!rtdbSnapshot.exists()) {
+            console.warn("Could not fetch RTDB user statuses for liveness check. Displaying all users from Firestore. Some may be stale.");
+            callback(playersFromFirestore);
+            return;
+        }
+
+        const rtdbStatuses = rtdbSnapshot.val() || {};
+        
+        const activePlayers = playersFromFirestore.filter(player => {
+            const rtdbStatus = rtdbStatuses[player.uid];
+            return rtdbStatus && rtdbStatus.state === 'online';
+        });
+
+        callback(activePlayers);
     });
 };
 
@@ -265,7 +277,6 @@ export const listenForInvitations = (uid: string, callback: (invitation: Invitat
 };
 
 export const acceptInvitation = async (user: User, invitation: Invitation): Promise<string | null> => {
-    // Players are swapped for the new game to alternate who goes first.
     const gameId = await createOnlineGame(user.uid, invitation.from);
     const batch = writeBatch(db);
     batch.update(doc(db, "onlineUsers", user.uid), { status: 'in_game', gameId });
@@ -298,12 +309,14 @@ export const createOnlineGame = async (player1Uid: string, player2Uid: string): 
                 avatarUrl: (p1Profile?.activeAvatarId ? ALL_COSMETICS.find(c => c.id === p1Profile.activeAvatarId)?.item as Avatar : DEFAULT_AVATAR).url, 
                 level: p1Profile?.level || 1,
                 pieceId: p1Profile?.activePieceId || DEFAULT_PIECES_X.id,
+                cp: p1Profile?.cp || 0,
             },
             [player2Uid]: { 
                 name: p2Profile?.name || 'Player 2', 
                 avatarUrl: (p2Profile?.activeAvatarId ? ALL_COSMETICS.find(c => c.id === p2Profile.activeAvatarId)?.item as Avatar : DEFAULT_AVATAR).url, 
                 level: p2Profile?.level || 1,
                 pieceId: p2Profile?.activePieceId || DEFAULT_PIECES_X.id,
+                cp: p2Profile?.cp || 0,
             },
         },
         board: {},
@@ -335,12 +348,9 @@ export const getOnlineGame = async (gameId: string): Promise<OnlineGame | null> 
     return docSnap.exists() ? docSnap.data() as OnlineGame : null;
 };
 
-export const listenForGameStart = (uid: string, callback: (gameId: string | null) => void): (() => void) => {
+export const listenForGameStart = (uid: string, callback: (playerData: OnlinePlayer | null) => void): (() => void) => {
     return onSnapshot(doc(db, 'onlineUsers', uid), (doc) => {
-        if (doc.exists()) {
-            const data = doc.data() as OnlinePlayer;
-            callback(data.gameId || null);
-        }
+        callback(doc.exists() ? doc.data() as OnlinePlayer : null);
     });
 };
 
@@ -359,7 +369,7 @@ export const makeOnlineMove = async (gameId: string, row: number, col: number, p
     if (gameData.status !== 'in_progress' || gameData.currentPlayer !== player) return;
 
     const newBoard = mapToBoard(gameData.board);
-    if (newBoard[row][col] !== null) return; // Prevent overwriting cells
+    if (newBoard[row][col] !== null) return;
     newBoard[row][col] = player;
 
     const timeElapsed = Math.round((Date.now() - gameData.turnStartedAt) / 1000);
@@ -401,7 +411,7 @@ export const claimTimeoutVictory = async (gameId: string, claimant: Player) => {
         const gameData = gameSnap.data() as OnlineGame;
         if (gameData.status === 'in_progress' && gameData.currentPlayer !== claimant) {
             const timeSinceLastMove = (Date.now() - gameData.turnStartedAt) / 1000;
-            if (timeSinceLastMove > (TURN_TIME + 2)) { // Add 2s buffer for network latency
+            if (timeSinceLastMove > (TURN_TIME + 2)) {
                 console.log(`Player ${claimant} is claiming a timeout victory.`);
                 await updateDoc(gameRef, {
                     status: 'finished',
@@ -442,8 +452,53 @@ export const returnToLobby = async (uid: string) => {
 };
 
 export const leaveOnlineGame = async (gameId: string, uid: string) => {
-    // This function now only handles updating the player's status.
-    // The game document cleanup is left to a server-side function to prevent
-    // race conditions where one player deletes the doc while the other is viewing it.
     await returnToLobby(uid);
+};
+
+export const cleanupOldGames = async (): Promise<void> => {
+    const thirtyMinutesAgo = Date.now() - (30 * 60 * 1000);
+    
+    const finishedGamesQuery = query(
+        collection(db, 'games'), 
+        where('status', '==', 'finished'),
+        where('updatedAt', '<', thirtyMinutesAgo)
+    );
+
+    const inactiveGamesQuery = query(
+        collection(db, 'games'),
+        where('status', '==', 'in_progress'),
+        where('updatedAt', '<', thirtyMinutesAgo)
+    );
+
+    try {
+        const [finishedGamesSnapshot, inactiveGamesSnapshot] = await Promise.all([
+            getDocs(finishedGamesQuery),
+            getDocs(inactiveGamesQuery)
+        ]);
+
+        if (finishedGamesSnapshot.empty && inactiveGamesSnapshot.empty) {
+            return;
+        }
+        
+        const batch = writeBatch(db);
+        let count = 0;
+
+        finishedGamesSnapshot.forEach(doc => {
+            batch.delete(doc.ref);
+            count++;
+        });
+
+        inactiveGamesSnapshot.forEach(doc => {
+            batch.delete(doc.ref);
+            count++;
+        });
+
+        if (count > 0) {
+            await batch.commit();
+            console.log(`Cleaned up ${count} old/inactive games.`);
+        }
+
+    } catch (error) {
+        console.error("Error cleaning up old games:", error);
+    }
 };

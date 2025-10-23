@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import * as onlineService from '../services/onlineService';
 import type { OnlinePlayer, Invitation, OnlineGame } from '../types';
@@ -8,6 +7,7 @@ import Modal from './Modal';
 import { SettingsModal } from './game/GameModals';
 import VersusScreen from './game/VersusScreen';
 import { useGameState } from '../context/GameStateContext';
+import { getRankFromCp } from '../constants';
 
 interface OnlineLobbyProps {
   onStartGame: (gameId: string) => void;
@@ -144,12 +144,12 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = ({ onStartGame, onBack }) => {
       setPlayers(onlinePlayers.filter(p => p.uid !== user.uid));
     });
 
-    // FIX: Only act when a gameId is found. Do not do anything on a null gameId,
-    // as this was causing the "Find Match" modal to flicker and disappear.
-    const unsubscribeGame = onlineService.listenForGameStart(user.uid, (gameId) => {
-      if (gameId) {
-        handleGameFound(gameId);
-      }
+    const unsubscribeGame = onlineService.listenForGameStart(user.uid, (playerData) => {
+        // Only react to a new game if the user is in a state where they expect one.
+        // This prevents re-triggering the Versus screen when exiting a finished game.
+        if (playerData && playerData.gameId && (playerData.status === 'idle' || playerData.status === 'in_queue')) {
+            handleGameFound(playerData.gameId);
+        }
     });
 
     return () => {
@@ -190,9 +190,10 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = ({ onStartGame, onBack }) => {
       setIsSearching(false);
   }
   
-  const { onlineWins, onlineLosses, onlineDraws } = gameState;
+  const { onlineWins, onlineLosses, onlineDraws, cp, coins } = gameState;
   const totalGames = onlineWins + onlineLosses + onlineDraws;
   const winRate = totalGames > 0 ? ((onlineWins / totalGames) * 100).toFixed(2) : '0.00';
+  const rank = getRankFromCp(cp);
 
 
   if (versusGame && user) {
@@ -254,20 +255,36 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = ({ onStartGame, onBack }) => {
                 </div>
             </div>
             <div className="md:col-span-1 flex flex-col gap-6">
-                <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
-                     <h3 className="font-semibold text-white text-lg mb-3">Your Stats (Online)</h3>
-                    <div className="grid grid-cols-3 gap-2 text-center">
+                 <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3">
+                    <div className="flex items-center gap-3">
+                        <img src={gameState.activeAvatar.url} alt="Your Avatar" className="w-14 h-14 rounded-full flex-shrink-0 border-2 border-slate-600 object-cover bg-slate-700" />
+                        <div className="text-left">
+                            <h2 className="text-lg font-bold text-white truncate">{gameState.playerName}</h2>
+                            <div className="flex items-center gap-4">
+                                <span className="font-semibold text-cyan-400 text-sm">Level {gameState.playerLevel}</span>
+                                <div className="flex items-center gap-1.5">
+                                    <span className="text-yellow-400 font-bold text-sm">{coins}</span>
+                                    <span className="text-yellow-400">💰</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="mt-2 text-left bg-slate-900/50 rounded-lg p-2 flex items-center justify-between">
+                        <p className="text-sm font-semibold">{rank.icon} {rank.name}</p>
+                        <p className="text-xs text-slate-300">{rank.cpInTier} / 100 CP</p>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-center mt-3">
                         <div className="p-1">
-                            <p className="text-green-400 font-bold text-xl">{onlineWins}</p>
-                            <p className="text-slate-400 text-xs uppercase tracking-wider">Wins</p>
+                            <p className="text-green-400 font-bold text-lg">{onlineWins}</p>
+                            <p className="text-slate-400 text-[10px] leading-tight uppercase tracking-wider">Wins</p>
                         </div>
                         <div className="p-1">
-                            <p className="text-red-400 font-bold text-xl">{onlineLosses}</p>
-                            <p className="text-slate-400 text-xs uppercase tracking-wider">Losses</p>
+                            <p className="text-red-400 font-bold text-lg">{onlineLosses}</p>
+                            <p className="text-slate-400 text-[10px] leading-tight uppercase tracking-wider">Losses</p>
                         </div>
                         <div className="p-1">
-                            <p className="text-cyan-400 font-bold text-xl">{winRate}%</p>
-                            <p className="text-slate-400 text-xs uppercase tracking-wider">Win Rate</p>
+                            <p className="text-cyan-400 font-bold text-lg">{winRate}%</p>
+                            <p className="text-slate-400 text-[10px] leading-tight uppercase tracking-wider">Win Rate</p>
                         </div>
                     </div>
                 </div>

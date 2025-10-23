@@ -43,9 +43,10 @@ interface GameOverScreenProps {
   // FIX: Added onRematch to handle online game rematches.
   onRematch?: (newGameId: string) => void;
   leaveCountdown?: number;
+  cpChange?: number;
 }
 
-const GameOverScreen: React.FC<GameOverScreenProps> = ({show, winner, timedOutPlayer, playerMark, onReset, onExit, playerLevel, playerXp, gameMode, leaveCountdown}) => {
+const GameOverScreen: React.FC<GameOverScreenProps> = ({show, winner, timedOutPlayer, playerMark, onReset, onExit, playerLevel, playerXp, gameMode, leaveCountdown, cpChange = 0}) => {
     const [animationStage, setAnimationStage] = useState<'start' | 'filling' | 'levelUp' | 'done'>('start');
     const [displayLevel, setDisplayLevel] = useState(playerLevel);
 
@@ -95,7 +96,8 @@ const GameOverScreen: React.FC<GameOverScreenProps> = ({show, winner, timedOutPl
     
     const animatedCoins = useAnimatedCounter(coinsEarned, animationStage !== 'start');
     const animatedXp = useAnimatedCounter(xpEarned, animationStage !== 'start');
-    
+    const animatedCpChange = useAnimatedCounter(cpChange, animationStage !== 'start');
+
     const title = useMemo(() => {
         if (winner === 'timeout') return didPlayerTimeout ? "TIME'S UP!" : "OPPONENT TIMED OUT";
         if (isWin) return "YOU WIN!";
@@ -175,6 +177,14 @@ const GameOverScreen: React.FC<GameOverScreenProps> = ({show, winner, timedOutPl
                             <span className="text-2xl">✨</span>
                             <span className={`font-bold text-purple-400 text-xl transition-opacity duration-500 ${animationStage !== 'start' ? 'opacity-100' : 'opacity-0'}`}>+{animatedXp} XP</span>
                         </div>
+                        {gameMode === 'online' && (
+                            <div className="flex flex-col items-center">
+                                <span className="text-2xl">{cpChange >= 0 ? '🏆' : '💔'}</span>
+                                <span className={`font-bold text-xl transition-opacity duration-500 ${animationStage !== 'start' ? 'opacity-100' : 'opacity-0'} ${cpChange >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                    {animatedCpChange >= 0 ? `+${animatedCpChange}` : animatedCpChange} CP
+                                </span>
+                            </div>
+                        )}
                     </div>
                 </div>
 

@@ -5,7 +5,7 @@ import { getAIMove } from '../services/aiService';
 import { updateOpeningBook } from '../services/openingBook';
 import * as onlineService from '../services/onlineService';
 import type { Player, GameTheme, PieceStyle, BotProfile, Avatar, Emoji, PieceEffect, VictoryEffect, BoomEffect, GameMode } from '../types';
-import { PIECE_STYLES, EffectStyles, VictoryAndBoomStyles, DEFAULT_PIECES_X, DEFAULT_PIECES_O, TURN_TIME } from '../constants';
+import { PIECE_STYLES, EffectStyles, VictoryAndBoomStyles, DEFAULT_PIECES_X, DEFAULT_PIECES_O, TURN_TIME, calculateCpChange } from '../constants';
 import { useGameState } from '../context/GameStateContext';
 import { useAuth } from '../context/AuthContext';
 import { useSound } from '../hooks/useSound';
@@ -58,10 +58,11 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
     const [aiPieceStyle, setAiPieceStyle] = useState<PieceStyle>(pieces.O);
     const [aiThinkingCell, setAiThinkingCell] = useState<{row: number, col: number} | null>(null);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-    const [isEmojiPanelOpen, setEmojiPanelOpen] = useState(false);
+    const [isEmojiPanelOpen, setIsEmojiPanelOpen] = useState(false);
     const [isUndoModalOpen, setIsUndoModalOpen] = useState(false);
     const [copySuccess, setCopySuccess] = useState(false);
     const [leaveCountdown, setLeaveCountdown] = useState(15);
+    const [cpChange, setCpChange] = useState(0);
 
     // Game Over Flow State
     const [gameOverStage, setGameOverStage] = useState<GameOverStage>('none');
@@ -90,7 +91,6 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
 
     // --- Destructure from active logic hook ---
     const { board, currentPlayer, winner, isGameOver, winningLine, isDecidingFirst, gameId, playerMark, makeMove, resign, lastMove } = gameLogic;
-    const { totalGameTime: pveTotalGameTime } = pveLogic;
     const { onlineGameData, isLoading: isLoadingOnlineGame, opponentEmote: onlineOpponentEmote, activePlayerTime, turnTimeLeft: onlineTurnTimeLeft } = onlineLogic;
     
     // Set a ref once the game data has been successfully loaded at least once.
@@ -100,24 +100,13 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
 
     // --- Effects ---
     
-    // This cleanup effect is crucial for preventing race conditions when leaving an online game.
-    useEffect(() => {
-        if (gameMode === 'online' && onlineGameId && user) {
-            // This is the cleanup function that will run when the component unmounts
-            // because the key changes or the view switches.
-            return () => {
-                onlineService.leaveOnlineGame(onlineGameId, user.uid);
-            };
-        }
-    }, [gameMode, onlineGameId, user]);
-    
     useEffect(() => {
         isGameResultProcessedRef.current = false;
         setGameOverStage('none');
         setGameOverMessage(null);
         setWinnerPlayer(null);
         setHasShownFirstMove(false);
-    }, [gameId, onlineGameId]);
+    }, [gameId]);
     
     // Countdown timer for automatically leaving the game over screen.
     useEffect(() => {
@@ -201,11 +190,25 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
 
     // Game Over Flow
     useEffect(() => {
-        if (isGameOver && winner && !isGameResultProcessedRef.current) {
+        // Guard clause to prevent re-triggering game over sequence while exiting an online match.
+        if (gameMode === 'online' && !onlineGameId) {
+            return;
+        }
+
+        if (isGameOver && winner && !isGameResultProcessedRef.current && user) {
             isGameResultProcessedRef.current = true;
             const result = winner === playerMark ? 'win' : winner === 'draw' ? 'draw' : 'loss';
             const opponentId = gameMode === 'pve' ? bot!.id : (onlineGameData?.players.X === user?.uid ? onlineGameData?.players.O : onlineGameData?.players.X) || 'unknown';
-            applyGameResult(result, opponentId, gameId);
+            
+            let calculatedCpChange = 0;
+            if (gameMode === 'online' && onlineGameData) {
+                const playerInitialCp = onlineGameData.playerDetails[user.uid]?.cp || 0;
+                const opponentInitialCp = onlineGameData.playerDetails[opponentId]?.cp || 0;
+                calculatedCpChange = calculateCpChange(playerInitialCp, opponentInitialCp, result);
+                setCpChange(calculatedCpChange);
+            }
+
+            applyGameResult(result, opponentId, gameId, calculatedCpChange);
             
             if (result === 'win') { playSound('win'); playSound('announce_win'); setGameOverMessage('You Win!'); } 
             else if (result === 'loss') { playSound('lose'); playSound('announce_lose'); setGameOverMessage('You Lose!'); }
@@ -237,7 +240,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
 
             return () => { clearTimeout(effectsTimer); clearTimeout(summaryTimer); };
         }
-    }, [isGameOver, winner, playerMark, applyGameResult, bot, gameId, gameMode, onlineGameData, user, pveLogic.moveHistory, playSound]);
+    }, [isGameOver, winner, playerMark, applyGameResult, bot, gameId, gameMode, onlineGameData, user, pveLogic.moveHistory, playSound, onlineGameId]);
     
     const opponentInfo = useMemo(() => {
         if (gameMode === 'online' && onlineGameData && user) {
@@ -280,7 +283,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
         playSound('select');
         setPlayerEmote({ key: Date.now(), emoji: emoji.emoji });
         consumeEmoji(emoji.id);
-        setEmojiPanelOpen(false);
+        setIsEmojiPanelOpen(false);
         if (gameMode === 'online') onlineLogic.sendEmote(emoji.emoji);
     };
 
@@ -318,7 +321,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
         );
     }
     
-    const displayedTime = gameMode === 'pve' ? pveTotalGameTime : activePlayerTime;
+    const displayedTime = gameMode === 'pve' ? pveLogic.totalGameTime : activePlayerTime;
     const turnTimeLeft = gameMode === 'pve' ? pveLogic.turnTimeLeft : onlineTurnTimeLeft;
     const gameIdToDisplay = gameMode === 'online' && gameId ? `Room: ${gameId.split('_').pop()?.substring(0, 6)}` : null;
 
@@ -340,10 +343,10 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
                     Caro AI Arena
                 </h1>
                 <div className="relative flex items-center justify-center gap-4 mt-2">
-                    <button onClick={() => { playSound('select'); setIsSettingsOpen(true); }} className="bg-slate-800/80 p-2 rounded-full hover:bg-slate-700 transition-colors" aria-label="Settings"><svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924-1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066 2.573c-.94-1.543.826 3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg></button>
-                    {gameMode === 'pve' && <button onClick={handleUndoClick} disabled={!pveLogic.canUndo || gameState.coins < 20} className="relative bg-slate-800/80 p-2 rounded-full hover:bg-slate-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" aria-label="Undo"><svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 15l-3-3m0 0l3-3m-3 3h8a5 5 0 000-10H9"></path></svg></button>}
-                    <button onClick={() => { playSound('select'); setEmojiPanelOpen(p => !p); }} className="bg-slate-800/80 p-2 rounded-full hover:bg-slate-700 transition-colors" aria-label="Emotes"><svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></button>
-                    {isEmojiPanelOpen && ( <div className="absolute top-full mt-4 bg-slate-800/90 backdrop-blur-sm p-2 rounded-lg flex flex-wrap justify-center gap-2 animate-fade-in-down z-30" style={{width: '280px'}} onMouseLeave={() => setEmojiPanelOpen(false)}> {ownedEmojis.map(e => <button key={e.id} onClick={() => handleSendEmoji(e)} className="text-3xl w-12 h-12 flex items-center justify-center rounded-md hover:bg-slate-700/50 hover:scale-110 transition-all">{e.emoji}</button>)} </div> )}
+                    <button onClick={() => { playSound('select'); setIsSettingsOpen(true); }} className="bg-slate-800/80 p-2 rounded-full hover:bg-slate-700 transition-colors" aria-label="Settings"><svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426-1.756-2.924-1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066 2.573c-.94-1.543.826 3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg></button>
+                    {gameMode === 'pve' && <button onClick={handleUndoClick} disabled={!pveLogic.canUndo || gameState.coins < 20} className="relative bg-slate-800/80 p-2 rounded-full hover:bg-slate-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" aria-label="Undo"><svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 15l-3-3m0 0l3-3m-3 3h8a5 5 0 000-10H9"></path></svg></button>}
+                    <button onClick={() => { playSound('select'); setIsEmojiPanelOpen(p => !p); }} className="bg-slate-800/80 p-2 rounded-full hover:bg-slate-700 transition-colors" aria-label="Emotes"><svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></button>
+                    {isEmojiPanelOpen && ( <div className="absolute top-full mt-4 bg-slate-800/90 backdrop-blur-sm p-2 rounded-lg flex flex-wrap justify-center gap-2 animate-fade-in-down z-30" style={{width: '280px'}} onMouseLeave={() => setIsEmojiPanelOpen(false)}> {ownedEmojis.map(e => <button key={e.id} onClick={() => handleSendEmoji(e)} className="text-3xl w-12 h-12 flex items-center justify-center rounded-md hover:bg-slate-700/50 hover:scale-110 transition-all">{e.emoji}</button>)} </div> )}
                 </div>
             </header>
 
@@ -364,7 +367,6 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
                     <PlayerInfo ref={opponentAvatarRef} name={opponentInfo.name} avatar={opponentInfo.avatar} level={opponentInfo.level} align="right" player={playerMark === 'X' ? 'O' : 'X'} isCurrent={currentPlayer !== playerMark} piece={allPieces[playerMark === 'X' ? 'O' : 'X']} skillLevel={gameMode === 'pve' ? bot?.skillLevel : undefined} />
                 </div>
                 <div className="w-full mx-auto">
-                    {/* FIX: Removed unsupported 'time' prop. The component uses its own internal timer. */}
                     <SmoothTimerBar
                         key={`${gameId}-${currentPlayer}`}
                         duration={TURN_TIME}
@@ -406,6 +408,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
             gameMode={gameMode}
             onlineGame={onlineGameData}
             leaveCountdown={leaveCountdown}
+            cpChange={cpChange}
         />
 
         <UndoModal 

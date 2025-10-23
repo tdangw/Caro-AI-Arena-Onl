@@ -1,7 +1,7 @@
 // FIX: Corrected import statement for React hooks.
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import MainMenu from './components/MainMenu';
-import GameScreen from './components/GameScreen';
+import GameScreen from './components/game/GameScreen';
 import Shop from './components/Shop';
 import Inventory from './components/Inventory';
 import AuthScreen from './components/AuthScreen';
@@ -17,6 +17,10 @@ type View = 'menu' | 'pve_game' | 'shop' | 'inventory' | 'lobby' | 'online_game'
 type Overlay = 'shop' | 'inventory' | null;
 
 const ACTIVE_PVE_GAME_BOT_KEY = 'caroActivePveGame_bot';
+const ACTIVE_PVE_GAME_STATE_KEY = 'caroGameState_inProgress';
+
+// FIX: Moved IDLE_TIMEOUT_MS to a higher scope so it is accessible to resetIdleTimer.
+const IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 const LoadingScreen: React.FC = () => (
     <div className="min-h-screen bg-slate-900 text-white p-4 flex flex-col items-center justify-center text-center">
@@ -30,20 +34,12 @@ const LoadingScreen: React.FC = () => (
 
 const AppContent: React.FC = () => {
     const { user, logOut } = useAuth();
-    const [view, setView] = useState<View>(() => {
-        return localStorage.getItem(ACTIVE_PVE_GAME_BOT_KEY) ? 'pve_game' : 'menu';
-    });
-    const [activeBot, setActiveBot] = useState<BotProfile | null>(() => {
-        try {
-            const savedBot = localStorage.getItem(ACTIVE_PVE_GAME_BOT_KEY);
-            return savedBot ? JSON.parse(savedBot) : null;
-        } catch {
-            localStorage.removeItem(ACTIVE_PVE_GAME_BOT_KEY);
-            return null;
-        }
-    });
+    const [view, setView] = useState<View>('menu');
+    const [activeBot, setActiveBot] = useState<BotProfile | null>(null);
     const [activeOnlineGameId, setActiveOnlineGameId] = useState<string | null>(null);
     const [overlay, setOverlay] = useState<Overlay | null>(null);
+    const [isRejoining, setIsRejoining] = useState(true);
+
     const { gameState } = useGameState();
     const { playSound, playMusic, stopMusic } = useSound();
 
@@ -51,12 +47,12 @@ const AppContent: React.FC = () => {
     const [invitation, setInvitation] = useState<Invitation | null>(null);
     const [inviteCountdown, setInviteCountdown] = useState(10);
 
-    // --- Idle Timeout Logic ---
-    const IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24 hours
+    // --- Refs for state management during transitions ---
+    const isExitingOnlineGameRef = useRef(false);
     const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const handleLogout = useCallback(() => {
-        if (user) { // Check if user exists before logging out
+        if (user) { 
             console.log("User has been idle for 24 hours. Logging out.");
             logOut();
         }
@@ -70,7 +66,7 @@ const AppContent: React.FC = () => {
     }, [handleLogout]);
 
     useEffect(() => {
-        if (!user) { // Don't run timer if not logged in
+        if (!user) {
             if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
             return;
         }
@@ -94,16 +90,40 @@ const AppContent: React.FC = () => {
     }, [resetIdleTimer, user]);
 
 
-    // Run once on initial load to rejoin active games
+    // Run once on initial load to check for and rejoin any active games.
     useEffect(() => {
-        if (user) {
-            onlineService.getOnlineUser(user.uid).then(player => {
+        const rejoinActiveGame = async () => {
+            if (user) {
+                const player = await onlineService.getOnlineUser(user.uid);
                 if (player?.status === 'in_game' && player.gameId) {
-                    console.log(`Rejoining active game: ${player.gameId}`);
-                    onStartOnlineGame(player.gameId);
+                    console.log(`Rejoining active online game: ${player.gameId}`);
+                    setActiveOnlineGameId(player.gameId);
+                    setView('online_game');
+                    setIsRejoining(false);
+                    return; 
                 }
-            });
-        }
+            }
+
+            try {
+                const savedBot = localStorage.getItem(ACTIVE_PVE_GAME_BOT_KEY);
+                const savedGameState = localStorage.getItem(ACTIVE_PVE_GAME_STATE_KEY);
+                if (savedBot && savedGameState) {
+                    const botProfile = JSON.parse(savedBot);
+                    setActiveBot(botProfile);
+                    setView('pve_game');
+                    setIsRejoining(false);
+                    return;
+                }
+            } catch {
+                localStorage.removeItem(ACTIVE_PVE_GAME_BOT_KEY);
+                localStorage.removeItem(ACTIVE_PVE_GAME_STATE_KEY);
+            }
+            
+            setView('menu');
+            setIsRejoining(false);
+        };
+        
+        rejoinActiveGame();
     }, [user]);
 
 
@@ -119,8 +139,18 @@ const AppContent: React.FC = () => {
     useEffect(() => {
         if (!user) return;
     
-        // This listener is crucial for both starting a new game and for the rematch flow.
-        const unsubscribe = onlineService.listenForGameStart(user.uid, (gameId) => {
+        const unsubscribe = onlineService.listenForGameStart(user.uid, (playerData) => {
+            const gameId = playerData?.gameId || null;
+
+            if (isExitingOnlineGameRef.current) {
+                if (gameId === null) {
+                    // The backend has confirmed the exit, release the lock.
+                    isExitingOnlineGameRef.current = false;
+                }
+                // While exiting, ignore all game start signals.
+                return;
+            }
+
             if (gameId && gameId !== activeOnlineGameId) {
                 console.log(`Detected game change to ${gameId}. Switching...`);
                 onStartOnlineGame(gameId);
@@ -165,7 +195,6 @@ const AppContent: React.FC = () => {
     
     const handleAcceptInvite = async () => {
         if (!user || !invitation) return;
-        // This will create a new game, and the listenForGameStart hook will handle the transition.
         await onlineService.acceptInvitation(user, invitation);
         setInvitation(null);
     };
@@ -190,8 +219,6 @@ const AppContent: React.FC = () => {
         setActiveBot(null);
         setOverlay(null);
         setActiveOnlineGameId(null);
-        localStorage.removeItem(ACTIVE_PVE_GAME_BOT_KEY);
-        localStorage.removeItem('caroGameState_inProgress');
     }, [playSound]);
 
     const handleGoToOnline = () => {
@@ -200,6 +227,8 @@ const AppContent: React.FC = () => {
     };
     
     const onStartOnlineGame = (gameId: string) => {
+        // When we intentionally start a game, ensure the exit lock is released.
+        isExitingOnlineGameRef.current = false;
         setActiveOnlineGameId(gameId);
         setView('online_game');
     };
@@ -210,14 +239,20 @@ const AppContent: React.FC = () => {
 
     const handleGameEnd = useCallback(() => {
         if (view === 'online_game') {
-            // The cleanup effect in GameScreen will handle setting the user back to 'idle'.
-            // This prevents a race condition that was causing the game over screen to loop.
+            isExitingOnlineGameRef.current = true; // Activate the lock
+            if (user) {
+                onlineService.returnToLobby(user.uid);
+            }
             setView('lobby');
-            setActiveOnlineGameId(null);
+            setActiveOnlineGameId(null); // Clear the ID to unmount GameScreen
         } else {
             handleBackToMenu();
         }
-    }, [view, handleBackToMenu]);
+    }, [view, handleBackToMenu, user]);
+
+    if (isRejoining) {
+        return <LoadingScreen />;
+    }
     
     const renderView = () => {
         switch (view) {
@@ -226,7 +261,7 @@ const AppContent: React.FC = () => {
             case 'online_game':
                 if (!activeOnlineGameId || !user) {
                     setView('lobby');
-                    return null;
+                    return <LoadingScreen/>;
                 }
                 return <GameScreen 
                             key={activeOnlineGameId}
