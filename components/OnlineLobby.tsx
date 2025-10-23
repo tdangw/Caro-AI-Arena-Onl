@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import * as onlineService from '../services/onlineService';
-import type { OnlinePlayer, Invitation, OnlineGame } from '../types';
+import type { OnlinePlayer, Invitation, OnlineGame, MatchHistoryEntry, RankInfo } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useSound } from '../hooks/useSound';
 import Modal from './Modal';
@@ -14,11 +14,7 @@ interface OnlineLobbyProps {
   onBack: () => void;
 }
 
-interface SearchingModalProps {
-  onCancel: () => void;
-}
-
-const SearchingModal: React.FC<SearchingModalProps> = ({ onCancel }) => {
+const SearchingModal: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
   const [timeLeft, setTimeLeft] = useState(30);
   const animationStartRef = useRef<number | null>(null);
 
@@ -112,6 +108,87 @@ const SearchingModal: React.FC<SearchingModalProps> = ({ onCancel }) => {
   );
 };
 
+const Leaderboard: React.FC = () => {
+    const [topPlayers, setTopPlayers] = useState<OnlinePlayer[]>([]);
+
+    useEffect(() => {
+        onlineService.getLeaderboard(10).then(setTopPlayers);
+    }, []);
+
+    return (
+        <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 h-[75vh] flex flex-col">
+            <h2 className="text-xl font-semibold text-white mb-4 text-left">Leaderboard 🏆</h2>
+            <div className="flex-grow overflow-y-auto pr-2 scrollbar-hide">
+                {topPlayers.map((p, index) => {
+                    const rank = getRankFromCp(p.cp);
+                    const rankColor = index === 0 ? 'text-yellow-400' : index === 1 ? 'text-slate-300' : index === 2 ? 'text-orange-400' : 'text-slate-500';
+                    return (
+                        <div key={p.uid} className="flex items-center gap-3 bg-slate-900/50 p-2 rounded-lg mb-2">
+                            <span className={`text-lg font-bold w-6 text-center ${rankColor}`}>{index + 1}</span>
+                            <img src={p.avatarUrl} alt={p.name} className="w-9 h-9 rounded-full object-cover bg-slate-700" />
+                            <div className="flex-grow overflow-hidden">
+                                <p className="font-semibold text-white text-sm truncate">{p.name}</p>
+                                <p className="text-slate-400 text-xs truncate">{rank.icon} {rank.name}</p>
+                            </div>
+                            <p className="text-cyan-400 text-sm font-semibold">{p.cp} CP</p>
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
+const MatchHistoryModal: React.FC<{ isOpen: boolean; onClose: () => void; userId: string }> = ({ isOpen, onClose, userId }) => {
+    const [history, setHistory] = useState<MatchHistoryEntry[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        if (isOpen && userId) {
+            setLoading(true);
+            onlineService.getMatchHistory(userId).then(data => {
+                setHistory(data);
+                setLoading(false);
+            });
+        }
+    }, [isOpen, userId]);
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title="Match History" size="md">
+            <div className="max-h-[60vh] overflow-y-auto pr-2">
+                {loading ? <p className="text-slate-400">Loading history...</p> : 
+                 history.length === 0 ? <p className="text-slate-400">No online matches played yet.</p> :
+                 history.map(entry => {
+                     const resultColor = entry.result === 'win' ? 'text-green-400' : entry.result === 'loss' ? 'text-red-500' : 'text-yellow-400';
+                     const cpColor = entry.cpChange > 0 ? 'text-green-500' : entry.cpChange < 0 ? 'text-red-500' : 'text-slate-400';
+                     const duration = `${Math.floor(entry.duration / 60)}m ${entry.duration % 60}s`;
+                     const rank = getRankFromCp(entry.opponentCp);
+                     
+                     return (
+                        <div key={entry.id} className="bg-slate-800/50 p-3 rounded-lg mb-3 flex items-center justify-between gap-4">
+                            <div className="flex items-center gap-3 flex-grow">
+                                <img src={entry.opponentAvatarUrl} alt={entry.opponentName} className="w-12 h-12 rounded-full object-cover bg-slate-700" />
+                                <div className="overflow-hidden">
+                                    <p className="font-semibold text-white truncate">{entry.opponentName}</p>
+                                    <p className="text-xs text-slate-400 truncate" title={`Room: ${entry.id.split('_').pop()?.substring(0, 6)}`}>{rank.icon} {rank.name}</p>
+                                </div>
+                            </div>
+                            <div className="text-center">
+                                <p className={`font-bold text-lg ${resultColor}`}>{entry.result.toUpperCase()}</p>
+                                <p className={`text-sm font-semibold ${cpColor}`}>{entry.cpChange >= 0 ? `+${entry.cpChange}` : entry.cpChange} CP</p>
+                            </div>
+                            <div className="text-right text-sm text-slate-400">
+                                <p>⏱️ {duration}</p>
+                                <p>{new Date(entry.timestamp).toLocaleDateString()}</p>
+                            </div>
+                        </div>
+                     )
+                 })}
+            </div>
+        </Modal>
+    )
+}
+
 const OnlineLobby: React.FC<OnlineLobbyProps> = ({ onStartGame, onBack }) => {
   const { user, logOut } = useAuth();
   const { gameState } = useGameState();
@@ -120,6 +197,7 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = ({ onStartGame, onBack }) => {
   const [versusGame, setVersusGame] = useState<OnlineGame | null>(null);
   const [invitedPlayerIds, setInvitedPlayerIds] = useState<Record<string, 'invited'>>({});
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const { playSound } = useSound();
 
   const handleGameFound = async (gameId: string) => {
@@ -190,8 +268,8 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = ({ onStartGame, onBack }) => {
       setIsSearching(false);
   }
   
-  const { onlineWins, onlineLosses, onlineDraws, cp, coins } = gameState;
-  const totalGames = onlineWins + onlineLosses + onlineDraws;
+  const { onlineWins, onlineLosses, cp, coins } = gameState;
+  const totalGames = onlineWins + onlineLosses + (gameState.onlineDraws || 0);
   const winRate = totalGames > 0 ? ((onlineWins / totalGames) * 100).toFixed(2) : '0.00';
   const rank = getRankFromCp(cp);
 
@@ -205,10 +283,13 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = ({ onStartGame, onBack }) => {
       {isSearching && <SearchingModal onCancel={handleCancelSearch} />}
       <div className="absolute inset-0 bg-[url('data:image/svg+xml,%3Csvg%2D%2240%22%20height%3D%2240%22%20viewBox%3D%220%200%2040%2040%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cg%20fill%3D%22%231e293b%22%20fill-opacity%3D%220.4%22%20fill-rule%3D%22evenodd%22%3E%3Cpath%20d%3D%22M0%2040L40%200H20L0%2020M40%2040V20L20%2040%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E')] opacity-50"></div>
 
-      <div className="w-full max-w-4xl text-center z-10">
+      <div className="w-full max-w-6xl z-10">
         <header className="flex justify-between items-center mb-6">
             <h1 className="text-4xl font-bold text-cyan-400">Online Lobby</h1>
              <div className="flex items-center gap-2">
+                 <button onClick={() => { playSound('select'); setIsHistoryOpen(true); }} className="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">
+                    History
+                </button>
                 <button onClick={onBack} className="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">
                     Menu
                 </button>
@@ -218,8 +299,9 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = ({ onStartGame, onBack }) => {
             </div>
         </header>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="md:col-span-2 bg-slate-800/50 border border-slate-700 rounded-xl p-4 h-[60vh] flex flex-col">
+        <div className="grid grid-cols-1 md:grid-cols-[350px_1fr_350px] gap-6">
+            <Leaderboard />
+            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 h-[75vh] flex flex-col">
                 <h2 className="text-xl font-semibold text-white mb-4 text-left">Players Online ({players.length})</h2>
                 <div className="flex-grow overflow-y-auto pr-2 scrollbar-hide">
                     {players.length > 0 ? (
@@ -254,7 +336,7 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = ({ onStartGame, onBack }) => {
                     )}
                 </div>
             </div>
-            <div className="md:col-span-1 flex flex-col gap-6">
+            <div className="flex flex-col gap-6">
                  <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3">
                     <div className="flex items-center gap-3">
                         <img src={gameState.activeAvatar.url} alt="Your Avatar" className="w-14 h-14 rounded-full flex-shrink-0 border-2 border-slate-600 object-cover bg-slate-700" />
@@ -307,6 +389,7 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = ({ onStartGame, onBack }) => {
         onClose={() => setIsSettingsOpen(false)}
         onLogOut={logOut}
       />
+      {user && <MatchHistoryModal isOpen={isHistoryOpen} onClose={() => setIsHistoryOpen(false)} userId={user.uid} />}
     </div>
   );
 };

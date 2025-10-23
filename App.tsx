@@ -12,6 +12,7 @@ import type { BotProfile, Invitation } from './types';
 import { useSound } from './hooks/useSound';
 import * as onlineService from './services/onlineService';
 import Modal from './components/Modal';
+import RankChangeModal from './components/RankChangeModal';
 
 type View = 'menu' | 'pve_game' | 'shop' | 'inventory' | 'lobby' | 'online_game';
 type Overlay = 'shop' | 'inventory' | null;
@@ -40,7 +41,7 @@ const AppContent: React.FC = () => {
     const [overlay, setOverlay] = useState<Overlay | null>(null);
     const [isRejoining, setIsRejoining] = useState(true);
 
-    const { gameState } = useGameState();
+    const { gameState, rankNotification, clearRankNotification } = useGameState();
     const { playSound, playMusic, stopMusic } = useSound();
 
     // --- Global Invitation State ---
@@ -334,6 +335,8 @@ const AppContent: React.FC = () => {
                     </div>
                 )}
             </Modal>
+            
+            <RankChangeModal notification={rankNotification} onClose={clearRankNotification} />
 
             <style>{`
                 @keyframes app-fade-in {

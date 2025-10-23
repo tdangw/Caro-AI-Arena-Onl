@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import Modal from '../Modal';
 import { useGameState } from '../../context/GameStateContext';
 import { MUSIC_TRACKS } from '../../constants';
 import type { SoundEffect } from '../../hooks/useSound';
 import { useSound } from '../../hooks/useSound';
+import { useAuth } from '../../context/AuthContext';
 
 interface UndoModalProps {
   isOpen: boolean;
@@ -36,7 +37,9 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onOpenShop, onOpenInventory, onResign, onLogOut }) => {
   const { gameState, toggleSound, toggleMusic, setSoundVolume, setMusicVolume, equipMusic } = useGameState();
   const { playSound } = useSound();
+  const { user } = useAuth();
   const [isConfirmingLogout, setIsConfirmingLogout] = useState(false);
+  const [copySuccess, setCopySuccess] = useState(false);
 
   const handleMusicSelect = (musicUrl: string) => {
     playSound('select');
@@ -54,6 +57,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
     }
     setIsConfirmingLogout(false);
   }
+
+  const handleCopyUid = useCallback(() => {
+    if (user) {
+        navigator.clipboard.writeText(user.uid);
+        setCopySuccess(true);
+        setTimeout(() => setCopySuccess(false), 2000);
+    }
+  }, [user]);
 
   return (
     <>
@@ -92,6 +103,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           {onResign && <button onClick={() => { playSound('select'); onResign(); onClose(); }} className="w-full bg-orange-600 hover:bg-orange-500 font-bold py-3 rounded-lg transition-colors">Resign Game</button>}
           {onLogOut && <button onClick={handleLogoutClick} className="w-full bg-red-700 hover:bg-red-600 font-bold py-3 rounded-lg transition-colors">Log Out</button>}
           <button onClick={() => { playSound('select'); onClose(); }} className="w-full bg-slate-600 hover:bg-slate-500 font-bold py-3 rounded-lg transition-colors">Close</button>
+          
+          {user && !user.isAnonymous && (
+            <div className="!mt-6 pt-4 border-t border-slate-700 text-center">
+              <button 
+                onClick={handleCopyUid} 
+                className="text-xs text-slate-500 font-mono cursor-pointer transition-colors hover:text-slate-300 disabled:cursor-default disabled:text-green-400"
+                title="Click to copy UID"
+                disabled={copySuccess}
+              >
+                {copySuccess ? 'UID Copied!' : `UID: ${user.uid}`}
+              </button>
+            </div>
+          )}
         </div>
         <style>{`
           input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; background: #22d3ee; cursor: pointer; border-radius: 50%; } 

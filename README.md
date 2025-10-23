@@ -33,16 +33,11 @@ Tất cả các tài sản công cộng (hình ảnh, âm thanh) nên được �
 **Bước 3:** Đăng ký Avatar trong tệp `constants.tsx` trong mảng `AVATARS`, chỉ định `id`, `name`, và `url` (đường dẫn từ thư mục `public`).
 
 **Ví dụ:**
-
 ```typescript
 // Trong file: constants.tsx
 export const AVATARS: Avatar[] = [
-  // ...
-  {
-    id: 'avatar_my_cool_one',
-    name: 'Cool Avatar',
-    url: 'assets/avatars/my_cool_avatar.png',
-  },
+    // ...
+    { id: 'avatar_my_cool_one', name: 'Cool Avatar', url: 'assets/avatars/my_cool_avatar.png' },
 ];
 ```
 
@@ -77,22 +72,20 @@ Chế độ online yêu cầu một dự án Firebase. Hãy làm theo các bư�
 1.  Trong menu bên trái, đi tới "Authentication".
 2.  Nhấp vào "Get started" (Bắt đầu).
 3.  Trong tab "Sign-in method" (Phương thức đăng nhập), kích hoạt hai nhà cung cấp sau:
-    - **Email/Password** (Email/Mật khẩu)
-    - **Anonymous** (Ẩn danh)
+    *   **Email/Password** (Email/Mật khẩu)
+    *   **Anonymous** (Ẩn danh)
 
 ### Bước 4: Thiết lập Cơ sở dữ liệu (Firestore & Realtime Database)
 
 Bạn sẽ cần cả hai cơ sở dữ liệu cho hệ thống online.
 
 **A. Firestore Database:**
-
 1.  Trong menu bên trái, đi tới "Firestore Database".
 2.  Nhấp vào "Create database" (Tạo cơ sở dữ liệu).
 3.  Chọn **Start in production mode** (Bắt đầu ở chế độ sản xuất).
 4.  Chọn một vị trí máy chủ (thường là khu vực gần bạn nhất).
 5.  Nhấp "Enable" (Kích hoạt).
 6.  Sau khi tạo xong, đi tới tab **Rules** (Quy tắc) và dán toàn bộ nội dung sau, sau đó nhấp **Publish**:
-
     ```
     rules_version = '2';
     service cloud.firestore {
@@ -101,6 +94,11 @@ Bạn sẽ cần cả hai cơ sở dữ liệu cho hệ thống online.
         match /users/{userId} {
           allow read: if true;
           allow write: if request.auth != null && request.auth.uid == userId;
+
+          // Match history can only be written and read by the user themselves.
+          match /matchHistory/{gameId} {
+            allow read, write: if request.auth != null && request.auth.uid == userId;
+          }
         }
 
         // Online user presence:
@@ -111,7 +109,7 @@ Bạn sẽ cần cả hai cơ sở dữ liệu cho hệ thống online.
 
             // A user can create or delete their OWN presence document.
             allow create, delete: if request.auth != null && request.auth.uid == userId;
-
+            
             // Update permissions:
             // 1. A user can update their own document.
             // 2. Any user can update another user's status to 'in_game' for matchmaking.
@@ -123,7 +121,7 @@ Bạn sẽ cần cả hai cơ sở dữ liệu cho hệ thống online.
                 )
             );
         }
-
+        
         // Matchmaking queue: Authenticated users can create their own queue entry.
         // Any authenticated user can delete any entry. This is necessary for matchmaking
         // where one user removes both themselves and their opponent from the queue.
@@ -157,7 +155,6 @@ Bạn sẽ cần cả hai cơ sở dữ liệu cho hệ thống online.
     ```
 
 **B. Realtime Database (dành cho Presence System):**
-
 1.  Trong menu bên trái, bên dưới "Firestore Database", nhấp vào **Realtime Database**.
 2.  Nhấp vào "Create Database" (Tạo cơ sở dữ liệu).
 3.  Chọn một vị trí máy chủ.
@@ -180,7 +177,6 @@ Bạn sẽ cần cả hai cơ sở dữ liệu cho hệ thống online.
 ### Bước 5: Thêm Gói Firebase vào Dự án
 
 Mở terminal trong thư mục dự án của bạn và chạy lệnh sau:
-
 ```bash
 npm install firebase
 ```
@@ -191,19 +187,18 @@ npm install firebase
 2.  Bạn sẽ thấy một đối tượng `firebaseConfig` mẫu. **THAY THẾ NÓ** bằng đối tượng bạn đã sao chép ở Bước 2.
 
 **Ví dụ:**
-
 ```typescript
 // Trong file: firebaseConfig.ts
 
 // Dán cấu hình Firebase của bạn vào đây
 const firebaseConfig = {
-  apiKey: 'AIzaSyXXXXXXXXXXXXXXXXXXX',
-  authDomain: 'your-project-id.firebaseapp.com',
-  databaseURL: 'https://your-project-id.firebaseio.com',
-  projectId: 'your-project-id',
-  storageBucket: 'your-project-id.appspot.com',
-  messagingSenderId: '1234567890',
-  appId: '1:1234567890:web:abcdef123456',
+  apiKey: "AIzaSyXXXXXXXXXXXXXXXXXXX",
+  authDomain: "your-project-id.firebaseapp.com",
+  databaseURL: "https://your-project-id.firebaseio.com",
+  projectId: "your-project-id",
+  storageBucket: "your-project-id.appspot.com",
+  messagingSenderId: "1234567890",
+  appId: "1:1234567890:web:abcdef123456"
 };
 ```
 

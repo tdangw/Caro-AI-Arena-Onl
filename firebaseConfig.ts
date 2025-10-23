@@ -4,7 +4,6 @@ import firebase from 'firebase/compat/app';
 import 'firebase/compat/auth';
 import 'firebase/compat/firestore';
 import 'firebase/compat/database';
-import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getDatabase } from 'firebase/database';
 
@@ -28,7 +27,8 @@ const firebaseConfig = {
 
 // Initialize Firebase
 const app = firebase.initializeApp(firebaseConfig);
-const auth = getAuth(app);
+// FIX: Use compat syntax for auth initialization, as getAuth is not available in the compat layer.
+const auth = firebase.auth();
 const db = getFirestore(app);
 const rtdb = getDatabase(app);
 

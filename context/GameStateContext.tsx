@@ -1,6 +1,6 @@
-import React, { createContext, useState, useContext, ReactNode, useEffect, useCallback } from 'react';
-import type { Cosmetic, GameTheme, PieceStyle, Avatar, PieceEffect, VictoryEffect, BoomEffect, UserProfile, CosmeticType } from '../types';
-import { DEFAULT_THEME, DEFAULT_PIECES_X, DEFAULT_PIECES_O, DEFAULT_AVATAR, getXpForNextLevel, THEMES, PIECE_STYLES, AVATARS, PIECE_EFFECTS, VICTORY_EFFECTS, BOOM_EFFECTS, DEFAULT_EFFECT, DEFAULT_VICTORY_EFFECT, DEFAULT_BOOM_EFFECT, ALL_COSMETICS, MUSIC_TRACKS, COIN_REWARD, XP_REWARD } from '../constants';
+import React, { createContext, useState, useContext, ReactNode, useEffect, useCallback, useRef } from 'react';
+import type { Cosmetic, GameTheme, PieceStyle, Avatar, PieceEffect, VictoryEffect, BoomEffect, UserProfile, CosmeticType, RankInfo } from '../types';
+import { DEFAULT_THEME, DEFAULT_PIECES_X, DEFAULT_PIECES_O, DEFAULT_AVATAR, getXpForNextLevel, THEMES, PIECE_STYLES, AVATARS, PIECE_EFFECTS, VICTORY_EFFECTS, BOOM_EFFECTS, DEFAULT_EFFECT, DEFAULT_VICTORY_EFFECT, DEFAULT_BOOM_EFFECT, ALL_COSMETICS, MUSIC_TRACKS, COIN_REWARD, XP_REWARD, getRankFromCp, RANKS } from '../constants';
 import { useAuth } from './AuthContext';
 import * as onlineService from '../services/onlineService';
 import { updateProfile } from 'firebase/auth';
@@ -40,8 +40,10 @@ interface GameState {
 
 interface GameStateContextType {
   gameState: GameState;
+  rankNotification: { type: 'up' | 'down', from: RankInfo, to: RankInfo } | null;
+  clearRankNotification: () => void;
   setPlayerName: (name: string) => void;
-  applyGameResult: (result: 'win' | 'loss' | 'draw', opponentId: string, gameId: string | null, cpChange?: number) => void;
+  applyGameResult: (result: 'win' | 'loss' | 'draw', opponentId: string, gameData: { id: string | null, isPVE: boolean, createdAt?: number, updatedAt?: number, opponentDetails?: { name: string, avatarUrl: string, cp?: number }}, cpChange?: number) => void;
   spendCoins: (amount: number) => boolean;
   purchaseCosmetic: (cosmetic: Cosmetic) => boolean;
   consumeEmoji: (emojiId: string) => void;
@@ -149,6 +151,8 @@ export const GameStateProvider: React.FC<{ children: ReactNode }> = ({ children 
   const { user } = useAuth();
   const [gameState, setGameState] = useState<GameState>(loadGuestState);
   const [isFirebaseLoaded, setIsFirebaseLoaded] = useState(false);
+  const [rankNotification, setRankNotification] = useState<{ type: 'up' | 'down', from: RankInfo, to: RankInfo } | null>(null);
+  const loadedUserIdRef = useRef<string | null>(null);
 
   // Effect to load data from Firebase when user logs in
   useEffect(() => {
@@ -156,11 +160,19 @@ export const GameStateProvider: React.FC<{ children: ReactNode }> = ({ children 
         if (!user) {
             setIsFirebaseLoaded(false);
             setGameState(loadGuestState());
+            loadedUserIdRef.current = null;
+            return;
+        }
+
+        // FIX: Prevent re-fetching data if it's already loaded for the current user.
+        // This stops background auth refreshes from overwriting local state (e.g., after a game result).
+        if (loadedUserIdRef.current === user.uid) {
             return;
         }
 
         setIsFirebaseLoaded(false);
         const profile = await onlineService.getUserProfile(user.uid);
+        loadedUserIdRef.current = user.uid;
 
         if (profile) {
             // Hydrate state from Firebase profile
@@ -183,7 +195,7 @@ export const GameStateProvider: React.FC<{ children: ReactNode }> = ({ children 
                 pveLosses: profile.pveLosses,
                 pveDraws: profile.pveDraws,
                 playerLevel: profile.level,
-                xp: profile.xp,
+                playerXp: profile.xp,
                 ownedCosmeticIds: profile.ownedCosmeticIds,
                 emojiInventory: profile.emojiInventory,
                 activeTheme,
@@ -267,9 +279,9 @@ export const GameStateProvider: React.FC<{ children: ReactNode }> = ({ children 
     return true;
   }, [gameState.coins]);
   
-  const applyGameResult = useCallback((result: 'win' | 'loss' | 'draw', opponentId: string, gameId: string | null, cpChange: number = 0) => {
+  const applyGameResult = useCallback((result: 'win' | 'loss' | 'draw', opponentId: string, gameData: { id: string | null, isPVE: boolean, createdAt?: number, updatedAt?: number, opponentDetails?: { name: string, avatarUrl: string, cp?: number }}, cpChange = 0) => {
     setGameState(prev => {
-        if (gameId && prev.lastProcessedGameId === gameId) return prev;
+        if (gameData.id && prev.lastProcessedGameId === gameData.id) return prev;
 
         const xpToAdd = XP_REWARD[result];
         const coinsToAdd = COIN_REWARD[result];
@@ -283,13 +295,25 @@ export const GameStateProvider: React.FC<{ children: ReactNode }> = ({ children 
             xpNeeded = getXpForNextLevel(newLevel);
         }
 
-        const isPVE = opponentId.startsWith('bot_');
+        const isPVE = gameData.isPVE;
         const newBotStats = { ...prev.botStats };
         if (isPVE) {
             if (!newBotStats[opponentId]) newBotStats[opponentId] = { wins: 0, losses: 0, draws: 0 };
             if (result === 'win') newBotStats[opponentId].wins++;
             else if (result === 'draw') newBotStats[opponentId].draws++;
             else newBotStats[opponentId].losses++;
+        }
+
+        const oldRank = getRankFromCp(prev.cp);
+        const newCp = !isPVE ? Math.max(0, prev.cp + cpChange) : prev.cp;
+        const newRank = getRankFromCp(newCp);
+        
+        if (newRank.name !== oldRank.name && !isPVE) {
+            if (newCp > prev.cp) {
+                setRankNotification({ type: 'up', from: oldRank, to: newRank });
+            } else if (newCp < prev.cp) {
+                setRankNotification({ type: 'down', from: oldRank, to: newRank });
+            }
         }
 
         return {
@@ -303,12 +327,25 @@ export const GameStateProvider: React.FC<{ children: ReactNode }> = ({ children 
             onlineWins: !isPVE && result === 'win' ? prev.onlineWins + 1 : prev.onlineWins,
             onlineLosses: !isPVE && result === 'loss' ? prev.onlineLosses + 1 : prev.onlineLosses,
             onlineDraws: !isPVE && result === 'draw' ? prev.onlineDraws + 1 : prev.onlineDraws,
-            cp: !isPVE ? Math.max(0, prev.cp + cpChange) : prev.cp,
+            cp: newCp,
             botStats: newBotStats,
-            lastProcessedGameId: gameId || prev.lastProcessedGameId,
+            lastProcessedGameId: gameData.id || prev.lastProcessedGameId,
         };
     });
-}, []);
+
+    if (!gameData.isPVE && user && gameData.id && gameData.opponentDetails) {
+        const historyEntry = {
+            opponentName: gameData.opponentDetails.name,
+            opponentAvatarUrl: gameData.opponentDetails.avatarUrl,
+            opponentCp: gameData.opponentDetails.cp,
+            result,
+            cpChange,
+            timestamp: Date.now(),
+            duration: Math.round(((gameData.updatedAt || Date.now()) - (gameData.createdAt || Date.now())) / 1000)
+        };
+        onlineService.recordMatchHistory(user.uid, gameData.id, historyEntry);
+    }
+  }, [user]);
   
   const consumeEmoji = useCallback((emojiId: string) => {
     if (DEFAULT_EMOJI_IDS.includes(emojiId)) return;
@@ -366,10 +403,11 @@ export const GameStateProvider: React.FC<{ children: ReactNode }> = ({ children 
   const setSoundVolume = useCallback((volume: number) => setGameState(prev => ({...prev, soundVolume: volume})), []);
   const setMusicVolume = useCallback((volume: number) => setGameState(prev => ({...prev, musicVolume: volume})), []);
   const equipMusic = useCallback((musicUrl: string) => setGameState(prev => ({ ...prev, activeMusicUrl: musicUrl })), []);
+  const clearRankNotification = useCallback(() => setRankNotification(null), []);
 
   return (
     <GameStateContext.Provider value={{ 
-        gameState, setPlayerName, applyGameResult, spendCoins, purchaseCosmetic, consumeEmoji, 
+        gameState, rankNotification, clearRankNotification, setPlayerName, applyGameResult, spendCoins, purchaseCosmetic, consumeEmoji, 
         equipTheme: (item) => equipCosmetic('theme', item),
         equipPiece: (item) => equipCosmetic('piece', item),
         equipAvatar: (item) => equipCosmetic('avatar', item),

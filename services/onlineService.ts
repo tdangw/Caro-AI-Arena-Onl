@@ -12,11 +12,13 @@ import {
     serverTimestamp,
     limit,
     writeBatch,
-    where
+    where,
+    orderBy,
+    arrayUnion
 } from 'firebase/firestore';
 import { ref, onValue, set, onDisconnect, serverTimestamp as rtdbServerTimestamp, get } from "firebase/database";
 import { User, updateProfile } from 'firebase/auth';
-import type { UserProfile, OnlinePlayer, BoardState, Player, Invitation, OnlineGame, BoardMap, Avatar, Emoji } from '../types';
+import type { UserProfile, OnlinePlayer, BoardState, Player, Invitation, OnlineGame, BoardMap, Avatar, Emoji, MatchHistoryEntry, Friend, ChatMessage } from '../types';
 import { DEFAULT_THEME, DEFAULT_PIECES_X, DEFAULT_AVATAR, DEFAULT_EFFECT, DEFAULT_VICTORY_EFFECT, DEFAULT_BOOM_EFFECT, ALL_COSMETICS, BOARD_SIZE, WINNING_LENGTH, EMOJIS, INITIAL_GAME_TIME, TURN_TIME } from '../constants';
 
 const DEFAULT_EMOJI_IDS = ALL_COSMETICS.filter(c => c.type === 'emoji' && c.price === 0).map(c => c.id);
@@ -260,7 +262,41 @@ export const cancelMatchmaking = async (uid: string) => {
     await updateDoc(doc(db, "onlineUsers", uid), { status: 'idle' });
 };
 
-// --- Invitations ---
+// --- Leaderboard & Match History ---
+export const getLeaderboard = async (limitCount = 10): Promise<OnlinePlayer[]> => {
+    const q = query(
+        collection(db, "users"),
+        orderBy("cp", "desc"),
+        limit(limitCount)
+    );
+    const querySnapshot = await getDocs(q);
+    const leaderboardPlayers: OnlinePlayer[] = querySnapshot.docs.map(doc => {
+        const user = doc.data() as UserProfile;
+        return {
+            uid: user.uid,
+            name: user.name,
+            level: user.level,
+            avatarUrl: (ALL_COSMETICS.find(c => c.id === user.activeAvatarId)?.item as Avatar || DEFAULT_AVATAR).url,
+            status: 'idle', // Status isn't relevant for a static leaderboard
+            cp: user.cp
+        };
+    });
+    return leaderboardPlayers;
+};
+
+export const recordMatchHistory = async (uid: string, gameId: string, entry: Omit<MatchHistoryEntry, 'id'>) => {
+    const historyRef = doc(db, `users/${uid}/matchHistory`, gameId);
+    await setDoc(historyRef, { id: gameId, ...entry });
+};
+
+export const getMatchHistory = async (uid: string): Promise<MatchHistoryEntry[]> => {
+    const historyCol = collection(db, `users/${uid}/matchHistory`);
+    const q = query(historyCol, orderBy("timestamp", "desc"), limit(10));
+    const querySnapshot = await getDocs(q);
+    return querySnapshot.docs.map(doc => doc.data() as MatchHistoryEntry);
+};
+
+// --- Invitations & Friends ---
 export const sendInvitation = async (fromUser: User, toUid: string) => {
     const invitationRef = doc(db, 'invitations', toUid);
     await setDoc(invitationRef, {
@@ -289,6 +325,45 @@ export const acceptInvitation = async (user: User, invitation: Invitation): Prom
 export const declineInvitation = async (uid: string) => {
     await deleteDoc(doc(db, "invitations", uid));
 };
+
+export const addFriend = async (currentUserUid: string, friendUid: string) => {
+    const friendRef = doc(db, `users/${currentUserUid}/friends`, friendUid);
+    const friendProfile = await getUserProfile(friendUid);
+    if (!friendProfile) return;
+    
+    await setDoc(friendRef, {
+        uid: friendProfile.uid,
+        name: friendProfile.name,
+        addedAt: serverTimestamp(),
+    });
+    // A real system would have friend requests, but this is a simple one-way follow for now.
+    alert(`Added ${friendProfile.name} to your friends list! (Feature in development)`);
+};
+
+export const removeFriend = async (currentUserUid: string, friendUid: string) => {
+    const friendRef = doc(db, `users/${currentUserUid}/friends`, friendUid);
+    await deleteDoc(friendRef);
+};
+
+export const listenForFriends = (uid: string, callback: (friends: Friend[]) => void): (() => void) => {
+    const friendsCollection = collection(db, `users/${uid}/friends`);
+    return onSnapshot(friendsCollection, async (snapshot) => {
+        const friendPromises = snapshot.docs.map(doc => getUserProfile(doc.id));
+        const friendProfiles = await Promise.all(friendPromises);
+
+        const friends: Friend[] = friendProfiles
+            .filter((p): p is UserProfile => p !== null)
+            .map(p => ({
+                uid: p.uid,
+                name: p.name,
+                avatarUrl: (ALL_COSMETICS.find(c => c.id === p.activeAvatarId)?.item as Avatar || DEFAULT_AVATAR).url,
+                level: p.level,
+                status: 'offline' // default status, will be updated by component
+            }));
+        callback(friends);
+    });
+};
+
 
 // --- Game Logic ---
 export const createOnlineGame = async (player1Uid: string, player2Uid: string): Promise<string> => {
@@ -320,6 +395,7 @@ export const createOnlineGame = async (player1Uid: string, player2Uid: string): 
             },
         },
         board: {},
+        chat: [],
         currentPlayer: 'X',
         status: 'in_progress',
         winner: null,
@@ -331,6 +407,16 @@ export const createOnlineGame = async (player1Uid: string, player2Uid: string): 
     };
     await setDoc(gameRef, gameData);
     return gameId;
+};
+
+export const sendChatMessage = async (gameId: string, uid: string, message: string) => {
+    const gameRef = doc(db, 'games', gameId);
+    try {
+        const chatMessage: ChatMessage = { uid, message, timestamp: Date.now() };
+        await updateDoc(gameRef, {
+            chat: arrayUnion(chatMessage)
+        });
+    } catch (error) { console.error("Failed to send chat message:", error); }
 };
 
 export const sendOnlineEmote = async (gameId: string, uid: string, emoji: string) => {

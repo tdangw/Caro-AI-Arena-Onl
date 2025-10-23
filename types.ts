@@ -117,6 +117,7 @@ export interface OnlinePlayer {
     avatarUrl: string;
     status: 'idle' | 'in_game' | 'in_queue';
     gameId?: string | null;
+    cp?: number;
 }
 
 export interface Invitation {
@@ -162,4 +163,21 @@ export interface OnlineGame {
     leftGame?: {
         [uid: string]: boolean;
     }
+}
+
+export interface MatchHistoryEntry {
+  id: string; // gameId
+  opponentName: string;
+  opponentAvatarUrl: string;
+  opponentCp?: number;
+  result: 'win' | 'loss' | 'draw';
+  cpChange: number;
+  timestamp: number;
+  duration: number; // in seconds
+}
+
+export interface RankInfo {
+  name: string;
+  cpInTier: number;
+  icon: string;
 }

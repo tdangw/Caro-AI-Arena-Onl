@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import type { BotProfile, Cosmetic, PieceStyle, PieceEffect, Avatar, GameTheme, Emoji } from '../types';
 import { useGameState } from '../context/GameStateContext';
-import { BOTS, ALL_COSMETICS, getXpForNextLevel } from '../constants';
+import { BOTS, ALL_COSMETICS, getXpForNextLevel, getRankFromCp } from '../constants';
 import { SettingsModal } from './game/GameModals';
 import { useAuth } from '../context/AuthContext';
 import { useSound } from '../hooks/useSound';
@@ -73,7 +73,7 @@ const FeaturedItem: React.FC<{onGoToShop: () => void, itemOffset?: number}> = ({
 
 const PlayerProfile: React.FC = () => {
     const { gameState, setPlayerName, spendCoins } = useGameState();
-    const { playerName, playerLevel, playerXp, pveWins, pveLosses, pveDraws, activeAvatar, coins } = gameState;
+    const { playerName, playerLevel, playerXp, pveWins, pveLosses, pveDraws, activeAvatar, coins, cp } = gameState;
     const { playSound } = useSound();
 
     const [isEditingName, setIsEditingName] = useState(false);
@@ -122,6 +122,10 @@ const PlayerProfile: React.FC = () => {
     const avatarUrl = activeAvatar.url;
     const xpForNextLevel = getXpForNextLevel(playerLevel);
     const xpPercentage = (playerXp / xpForNextLevel) * 100;
+    
+    const rank = getRankFromCp(cp);
+    const isChallenger = rank.name === 'Thách Đấu';
+    const rankPercentage = isChallenger ? 100 : (rank.cpInTier / 100) * 100;
 
     const totalGames = pveWins + pveLosses + pveDraws;
     const winRate = totalGames > 0 ? ((pveWins / totalGames) * 100).toFixed(2) : '0.00';
@@ -171,16 +175,25 @@ const PlayerProfile: React.FC = () => {
                         <div className="bg-gradient-to-r from-cyan-400 to-blue-500 h-2 rounded-full transition-all duration-500 ease-out" style={{ width: `${xpPercentage}%` }}></div>
                     </div>
                 </div>
-                <div className="grid grid-cols-3 gap-2 text-center mt-4">
-                    <div className="transition-transform duration-200 hover:scale-110 p-2 rounded-lg">
+                <div className="mt-2">
+                    <div className="flex justify-between items-baseline text-xs text-slate-400 mb-1 px-1">
+                        <span className="font-semibold flex items-center gap-1">{rank.icon} {rank.name}</span>
+                        <span>{isChallenger ? `${cp} CP` : `${rank.cpInTier} / 100`}</span>
+                    </div>
+                    <div className="w-full bg-slate-700 rounded-full h-2">
+                        <div className="bg-gradient-to-r from-yellow-500 to-amber-500 h-2 rounded-full transition-all duration-500 ease-out" style={{ width: `${rankPercentage}%` }}></div>
+                    </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-center mt-3">
+                    <div className="transition-transform duration-200 hover:scale-110 p-1 rounded-lg">
                         <p className="text-green-400 font-bold text-lg">{pveWins}</p>
                         <p className="text-slate-400 text-[10px] leading-tight uppercase tracking-wider">Wins</p>
                     </div>
-                    <div className="transition-transform duration-200 hover:scale-110 p-2 rounded-lg">
+                    <div className="transition-transform duration-200 hover:scale-110 p-1 rounded-lg">
                         <p className="text-red-400 font-bold text-lg">{pveLosses}</p>
                         <p className="text-slate-400 text-[10px] leading-tight uppercase tracking-wider">Losses</p>
                     </div>
-                    <div className="transition-transform duration-200 hover:scale-110 p-2 rounded-lg">
+                    <div className="transition-transform duration-200 hover:scale-110 p-1 rounded-lg">
                         <p className="text-cyan-400 font-bold text-lg">{winRate}%</p>
                         <p className="text-slate-400 text-[10px] leading-tight uppercase tracking-wider">Win Rate</p>
                     </div>

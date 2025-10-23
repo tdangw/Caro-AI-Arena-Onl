@@ -201,6 +201,18 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
     }, [currentPlayer, isGameOver, board, isPaused, isDecidingFirst, bot, gameMode, pveLogic, playerMark]);
 
 
+    const opponentInfo = useMemo(() => {
+        if (gameMode === 'online' && onlineGameData && user) {
+            const opponentUid = onlineGameData.players.X === user.uid ? onlineGameData.players.O : onlineGameData.players.X;
+            const details = onlineGameData.playerDetails[opponentUid];
+            return { name: details?.name || 'Opponent', avatar: details?.avatarUrl || 'assets/avatars/avatar_1.png', level: details?.level || 1 };
+        }
+        if (gameMode === 'pve' && bot) {
+            return { name: bot.name, avatar: bot.avatar, level: bot.level, skillLevel: bot.skillLevel };
+        }
+        return { name: 'Player', avatar: '', level: 1 };
+    }, [gameMode, onlineGameData, user, bot]);
+    
     // Game Over Flow
     useEffect(() => {
         console.log(`[GAMEOVER_EFFECT] Fired. isExiting: ${isExitingRef.current}, isGameOver: ${isGameOver}, winner: ${winner}, processed: ${isGameResultProcessedRef.current}, onlineGameId: ${onlineGameId}`);
@@ -215,7 +227,8 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
             console.log(`[GAMEOVER_EFFECT] PROCESSING a win/loss for game ${gameId}`);
             
             const result = winner === playerMark ? 'win' : winner === 'draw' ? 'draw' : 'loss';
-            const opponentId = gameMode === 'pve' ? bot!.id : (onlineGameData?.players.X === user?.uid ? onlineGameData?.players.O : onlineGameData?.players.X) || 'unknown';
+            const isPVE = gameMode === 'pve';
+            const opponentId = isPVE ? bot!.id : (onlineGameData?.players.X === user?.uid ? onlineGameData?.players.O : onlineGameData?.players.X) || 'unknown';
             
             let calculatedCpChange = 0;
             if (gameMode === 'online' && onlineGameData) {
@@ -224,8 +237,21 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
                 calculatedCpChange = calculateCpChange(playerInitialCp, opponentInitialCp, result);
                 setCpChange(calculatedCpChange);
             }
+            
+            const opponentCp = isPVE ? undefined : onlineGameData?.playerDetails[opponentId]?.cp;
+            const gameDataForHistory = {
+                id: gameId,
+                isPVE: isPVE,
+                createdAt: isPVE ? undefined : onlineGameData?.createdAt,
+                updatedAt: isPVE ? undefined : Date.now(), // use now as end time
+                opponentDetails: isPVE ? undefined : {
+                    name: opponentInfo.name,
+                    avatarUrl: opponentInfo.avatar,
+                    cp: opponentCp
+                }
+            };
 
-            applyGameResult(result, opponentId, gameId, calculatedCpChange);
+            applyGameResult(result, opponentId, gameDataForHistory, calculatedCpChange);
             
             if (result === 'win') { playSound('win'); playSound('announce_win'); setGameOverMessage('You Win!'); } 
             else if (result === 'loss') { playSound('lose'); playSound('announce_lose'); setGameOverMessage('You Lose!'); }
@@ -257,19 +283,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
 
             return () => { clearTimeout(effectsTimer); clearTimeout(summaryTimer); };
         }
-    }, [isGameOver, winner, playerMark, applyGameResult, bot, gameId, gameMode, onlineGameData, user, pveLogic.moveHistory, playSound, onlineGameId]);
-    
-    const opponentInfo = useMemo(() => {
-        if (gameMode === 'online' && onlineGameData && user) {
-            const opponentUid = onlineGameData.players.X === user.uid ? onlineGameData.players.O : onlineGameData.players.X;
-            const details = onlineGameData.playerDetails[opponentUid];
-            return { name: details?.name || 'Opponent', avatar: details?.avatarUrl || 'assets/avatars/avatar_1.png', level: details?.level || 1 };
-        }
-        if (gameMode === 'pve' && bot) {
-            return { name: bot.name, avatar: bot.avatar, level: bot.level, skillLevel: bot.skillLevel };
-        }
-        return { name: 'Player', avatar: '', level: 1 };
-    }, [gameMode, onlineGameData, user, bot]);
+    }, [isGameOver, winner, playerMark, applyGameResult, bot, gameId, gameMode, onlineGameData, user, pveLogic.moveHistory, playSound, onlineGameId, opponentInfo]);
 
     const allPieces = useMemo(() => {
         if (gameMode === 'pve') return { X: pieces.X, O: aiPieceStyle };

@@ -1,5 +1,5 @@
 import React from 'react';
-import type { GameTheme, PieceStyle, Cosmetic, BotProfile, Avatar, Emoji, PieceEffect, VictoryEffect, BoomEffect, MusicTrack } from './types';
+import type { GameTheme, PieceStyle, Cosmetic, BotProfile, Avatar, Emoji, PieceEffect, VictoryEffect, BoomEffect, MusicTrack, RankInfo } from './types';
 
 // --- Game Settings ---
 export const BOARD_SIZE = 15;
@@ -32,7 +32,7 @@ export const RANKS = [
   { name: 'Thách Đấu', tiers: 0, baseCp: 1800, icon: '🔥' }, // 1800+
 ];
 
-export const getRankFromCp = (cp: number | null | undefined) => {
+export const getRankFromCp = (cp: number | null | undefined): RankInfo => {
   const currentCp = Number.isFinite(cp) ? Math.max(0, cp as number) : 0;
   let playerRank = RANKS[0];
 
