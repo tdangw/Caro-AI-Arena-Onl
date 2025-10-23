@@ -1,22 +1,23 @@
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
-import { useGameLogic } from '../hooks/useGameLogic';
-import { getAIMove } from '../services/aiService';
-import { updateOpeningBook } from '../services/openingBook';
-import * as onlineService from '../services/onlineService';
-import type { Player, GameTheme, PieceStyle, BotProfile, Avatar, Emoji, PieceEffect, VictoryEffect, BoomEffect, GameMode, OnlineGame } from '../types';
-import { PIECE_STYLES, EffectStyles, VictoryAndBoomStyles } from '../constants';
-import { useGameState } from '../context/GameStateContext';
-import { useAuth } from '../context/AuthContext';
-import { useSound } from '../hooks/useSound';
+import { useGameLogic } from '../../hooks/useGameLogic';
+import { getAIMove } from '../../services/aiService';
+import { updateOpeningBook } from '../../services/openingBook';
+import * as onlineService from '../../services/onlineService';
+import type { Player, GameTheme, PieceStyle, BotProfile, Avatar, Emoji, PieceEffect, VictoryEffect, BoomEffect, GameMode, OnlineGame } from '../../types';
+// FIX: Added TURN_TIME to imports for use in the timer bar and turn calculations.
+import { PIECE_STYLES, EffectStyles, VictoryAndBoomStyles, TURN_TIME } from '../../constants';
+import { useGameState } from '../../context/GameStateContext';
+import { useAuth } from '../../context/AuthContext';
+import { useSound } from '../../hooks/useSound';
 
 // Import newly created sub-components
-import GameBoard from './game/GameBoard';
-import PlayerInfo from './game/PlayerInfo';
-import GameOverScreen from './game/GameOverScreen';
-import FirstMoveAnimation from './game/FirstMoveAnimation';
-import SmoothTimerBar from './game/SmoothTimerBar';
-import Emote from './game/Emote';
-import { SettingsModal, UndoModal } from './game/GameModals';
+import GameBoard from './GameBoard';
+import PlayerInfo from './PlayerInfo';
+import GameOverScreen from './GameOverScreen';
+import FirstMoveAnimation from './FirstMoveAnimation';
+import SmoothTimerBar from './SmoothTimerBar';
+import Emote from './Emote';
+import { SettingsModal, UndoModal } from './GameModals';
 
 type GameOverStage = 'none' | 'banner' | 'effects' | 'summary';
 
@@ -65,6 +66,11 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
     const [gameOverMessage, setGameOverMessage] = useState<string | null>(null);
     const [isUndoModalOpen, setIsUndoModalOpen] = useState(false);
     
+    // FIX: Added state and ref for the turn timer in online mode and the game over countdown.
+    const [onlineTurnTimeLeft, setOnlineTurnTimeLeft] = useState(TURN_TIME);
+    const [leaveCountdown, setLeaveCountdown] = useState(15);
+    const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
     const [playerEmote, setPlayerEmote] = useState<{key: number, emoji: string} | null>(null);
     const [opponentEmote, setOpponentEmote] = useState<{key: number, emoji: string} | null>(null);
     const isGameResultProcessedRef = useRef(false);
@@ -128,6 +134,54 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameMode, bot, onlineGameId, on
     const ownedEmojis = useMemo(() => {
         return onlineService.getOwnedEmojis(gameState.ownedCosmeticIds, gameState.emojiInventory);
     }, [gameState.ownedCosmeticIds, gameState.emojiInventory]);
+
+    // FIX: Added an effect to handle the online turn timer.
+    useEffect(() => {
+        if (gameMode !== 'online' || !onlineGame || onlineGame.status === 'finished' || isPaused) {
+            return;
+        }
+
+        const timerId = setInterval(() => {
+            const elapsed = (Date.now() - onlineGame.turnStartedAt) / 1000;
+            const remaining = TURN_TIME - elapsed;
+            setOnlineTurnTimeLeft(Math.max(0, remaining));
+
+            if (remaining < -2 && onlineGame.currentPlayer !== playerMark && user) {
+                onlineService.claimTimeoutVictory(onlineGame.id, playerMark);
+            }
+        }, 500);
+
+        return () => clearInterval(timerId);
+    }, [gameMode, onlineGame, isPaused, playerMark, user]);
+
+    // FIX: Added an effect to handle the game over screen countdown.
+    useEffect(() => {
+        const clearCountdown = () => {
+            if (countdownIntervalRef.current) {
+                clearInterval(countdownIntervalRef.current);
+                countdownIntervalRef.current = null;
+            }
+        };
+
+        if (gameOverStage === 'summary') {
+            setLeaveCountdown(15);
+            countdownIntervalRef.current = setInterval(() => {
+                setLeaveCountdown(prev => {
+                    if (prev <= 1) {
+                        clearCountdown();
+                        onExit();
+                        return 0;
+                    }
+                    return prev - 1;
+                });
+            }, 1000);
+        } else {
+            clearCountdown();
+        }
+        
+        return clearCountdown;
+    }, [gameOverStage, onExit]);
+
 
     // --- PVE Logic ---
     useEffect(() => {
@@ -299,6 +353,10 @@ pveGame.makeMove(row, col);
     const DecoratorComponent = theme.decoratorComponent;
     const VictoryComponent = activeVictoryEffect.component;
     const BoomComponent = activeBoomEffect.component;
+    
+    // FIX: Define the turnTimeLeft variable to be used by the SmoothTimerBar.
+    const turnTimeLeft = gameMode === 'pve' ? pveGame.turnTimeLeft : onlineTurnTimeLeft;
+
 
     if (gameMode === 'online' && isLoadingOnlineGame) {
         return (
@@ -348,7 +406,8 @@ pveGame.makeMove(row, col);
                     <PlayerInfo ref={opponentAvatarRef} name={opponentInfo.name} avatar={opponentInfo.avatar} level={opponentInfo.level} align="right" player={opponentMark} isCurrent={currentPlayer === opponentMark} piece={allPieces.O} skillLevel={gameMode === 'pve' ? bot?.skillLevel : undefined} />
                 </div>
                 <div className="w-full mx-auto">
-                    <SmoothTimerBar currentPlayer={currentPlayer} isPaused={isPaused} isGameOver={isGameOver} isDecidingFirst={isDecidingFirst} />
+                    {/* FIX: Replaced incorrect 'currentPlayer' prop with 'duration' and 'time' props. */}
+                    <SmoothTimerBar duration={TURN_TIME} time={turnTimeLeft} isPaused={isPaused} isGameOver={isGameOver} isDecidingFirst={isDecidingFirst} />
                     <div className="mt-px relative bg-black/40 backdrop-blur-lg rounded-xl p-2 border border-white/10 shadow-lg">
                         <GameBoard board={board} onCellClick={handleCellClick} winningLine={winningLine} pieces={allPieces} aiThinkingCell={aiThinkingCell} theme={theme} lastMove={lastMove} effect={activeEffect} />
                         {isDecidingFirst && gameMode === 'pve' && <FirstMoveAnimation pieces={allPieces} onAnimationEnd={pveGame.beginGame} playerMark={playerMark} playSound={playSound} gameMode="pve" playerInfo={playerInfo} opponentInfo={opponentInfo} />}
@@ -360,6 +419,7 @@ pveGame.makeMove(row, col);
         
         {gameOverStage === 'effects' && winnerPlayer && boomCoords && ( <><VictoryComponent /> <BoomComponent winnerCoords={boomCoords?.winner} loserCoords={boomCoords?.loser} /></>)}
 
+        {/* FIX: Removed unsupported 'onRematch' prop and added required 'leaveCountdown' prop. */}
         <GameOverScreen 
             show={gameOverStage === 'summary'} 
             winner={winner} 
@@ -371,7 +431,7 @@ pveGame.makeMove(row, col);
             playerXp={gameState.playerXp} 
             gameMode={gameMode}
             onlineGame={onlineGame}
-            onRematch={onRematch}
+            leaveCountdown={leaveCountdown}
         />
 
         <UndoModal 

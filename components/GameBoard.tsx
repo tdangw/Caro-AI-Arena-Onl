@@ -2,13 +2,14 @@
 import React from 'react';
 import Cell from './Cell';
 // FIX: Changed Board to BoardState and imported Coordinate.
-import type { BoardState, Coordinate } from '../types';
+// FIX: The 'Coordinate' type is not exported from '../types'. Replaced it with an inline type definition and removed it from the import.
+import type { BoardState } from '../types';
 
 interface GameBoardProps {
     // FIX: Changed Board to BoardState.
     board: BoardState;
     onCellClick: (row: number, col: number) => void;
-    winningLine: Coordinate[];
+    winningLine: { row: number; col: number }[];
     isGameActive: boolean;
 }
 

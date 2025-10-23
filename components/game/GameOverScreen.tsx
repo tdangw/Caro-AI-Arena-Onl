@@ -40,7 +40,9 @@ interface GameOverScreenProps {
   playerXp: number;
   gameMode: GameMode;
   onlineGame?: OnlineGame | null;
-  leaveCountdown: number;
+  // FIX: Added onRematch to handle online game rematches.
+  onRematch?: (newGameId: string) => void;
+  leaveCountdown?: number;
 }
 
 const GameOverScreen: React.FC<GameOverScreenProps> = ({show, winner, timedOutPlayer, playerMark, onReset, onExit, playerLevel, playerXp, gameMode, leaveCountdown}) => {
@@ -183,7 +185,7 @@ const GameOverScreen: React.FC<GameOverScreenProps> = ({show, winner, timedOutPl
                         </button>
                     )}
                     <button onClick={onExit} className="w-full max-w-sm bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 px-6 rounded-lg transition-colors">
-                       Back to {gameMode === 'online' ? 'Lobby' : 'Menu'} ({leaveCountdown}s)
+                       Back to {gameMode === 'online' ? 'Lobby' : 'Menu'}{leaveCountdown !== undefined && ` (${leaveCountdown}s)`}
                     </button>
                 </div>
             </div>
